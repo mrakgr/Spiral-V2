@@ -59,6 +59,12 @@
     <Content Include="packages.config" />
     <None Include="spiral.fsx" />
     <None Include="spiral_conv.fsx" />
+    <None Include="mnist_v0.fsx" />
+    <None Include="mnist_v2-.fsx" />
+    <None Include="mnist_v1-.fsx" />
+    <None Include="mnist_spiral-.fsx" />
+    <None Include="mnist_v1.fsx" />
+    <None Include="mnist_v2.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="CudaBlas">

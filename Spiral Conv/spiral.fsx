@@ -130,14 +130,11 @@ type dMatrix =
         t.dArray.CopyToHost(h_a)
         h_a
 
-    member inline t.isEmpty = t.dArray.Equals(CudaDeviceVariable.Null)
-
     /// The unmanaged Cuda memory has to be freed explicitly or by letting go of the context by resetting  the F# Interactive.
     /// Finalizers work really poorly and can lead to unpredictable bugs when used to manage Cuda memory.
+    /// Also do not bother to check whether an array is Null using Equals or =. Just hit Dispose().
     interface IDisposable with
-        member t.Dispose() = 
-            if t.isEmpty = false then
-                t.dArray.Dispose()
+        member t.Dispose() = t.dArray.Dispose()
 
 let T = Operation.Transpose
 let nT = Operation.NonTranspose
