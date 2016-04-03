@@ -391,6 +391,7 @@ let kernels_dir = IO.Path.Combine(__SOURCE_DIRECTORY__,"Cuda Kernels")
 IO.Directory.CreateDirectory(kernels_dir) // Creates the Cuda Kernels directory if it does not exist. WriteAllBytes would otherwise throw an exception.
 
 let inline size_nchw (n:int,c,h,w) = n*c*h*w
+let inline add_nchw (n:int,c,h,w) = n+c+h+w
 
 let load_kernel kernel_code kernel_name = 
     let kernel_path = IO.Path.Combine(kernels_dir,kernel_name)
@@ -918,8 +919,6 @@ let randMapModule = lazy DeviceBinaryCoefTransformModule("coef_x*(x-0.5f)+coef_y
 
 /// Fills matrix by sampling from a random uniform distribution in <-1.0f,1.0f]
 let fillRandomUniformMatrix (x_nchw, x : CudaDeviceVariable<float32> as x') (scaling_factor : float32) location =
-        let weights_total_size = size_nchw x_nchw
-
         cudaRandom.GenerateUniform(x)
         // 2.0f*scaling_factor ensures that it is rescaled around zero if the scaling_factor is 1.0f.
         randMapModule.Value.A(2.0f*scaling_factor,x',location,x',x')
@@ -1288,7 +1287,7 @@ let get_accuracy (targets : d4M) (activations : d4M) =
 
 type d4M with
     static member makeUniformRandomNode (n,c,h,w as nchw) =
-        let scale = (1.0f / sqrt(size_nchw nchw |> float32))
+        let scale = (1.0f / sqrt(add_nchw nchw |> float32))
         let p = d4M.create(n,c,h,w)
         fillRandomUniformMatrix p.P' scale 0.0f
         p

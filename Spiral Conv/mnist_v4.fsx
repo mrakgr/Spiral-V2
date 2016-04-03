@@ -45,6 +45,11 @@ let l2 = FeedforwardLayer.createRandomLayer (2024,2024,1,1) relu
 let l3 = FeedforwardLayer.createRandomLayer (2024,2024,1,1) relu
 let l4 = FeedforwardLayer.createRandomLayer (2024,10,1,1) clipped_sigmoid
 
+//let l1 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) false |> fun x -> FeedforwardLayer.fromArray x relu
+//let l2 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) false |> fun x -> FeedforwardLayer.fromArray x relu
+//let l3 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl3")) false |> fun x -> FeedforwardLayer.fromArray x relu
+//let l4 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl4")) false |> fun x -> FeedforwardLayer.fromArray x clipped_sigmoid
+
 let base_nodes = [|l1;l2;l3;l4|]
 
 let training_loop label data = // For now, this is just checking if the new library can overfit on a single minibatch.
@@ -52,10 +57,10 @@ let training_loop label data = // For now, this is just checking if the new libr
     |> Array.fold (fun x layer -> layer.runLayer x) data
     |> fun x -> lazy get_accuracy label x, cross_entropy_cost label x
 
-let learning_rate = 0.1f
+let learning_rate = 0.03f
 
 let test() =
-    for i=1 to 25 do
+    for i=1 to 10 do
         let mutable er = 0.0f
         for j=0 to train_images.Length-1 do
             let _,r = training_loop train_labels.[j] train_images.[j] // Forward step

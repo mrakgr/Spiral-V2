@@ -51,23 +51,30 @@ let [|dtest_images;test_labels;train_images;train_labels|] =
     [|"t10k-images.idx3-ubyte";"t10k-labels.idx1-ubyte";"train-images.idx3-ubyte";"train-labels.idx1-ubyte"|]
     |> Array.map (fun x -> Path.Combine(__SOURCE_DIRECTORY__,x) |> load_mnist)
 
-let dtest = Array.zip dtest_images test_labels |> fun x -> x.[0..0]
-let dtrain = Array.zip train_images train_labels |> fun x -> x.[0..0]
+let dtest = Array.zip dtest_images test_labels 
+let dtrain = Array.zip train_images train_labels
+
+let l1 = FeedforwardLayer.createRandomLayer 2048 784 relu
+sumModule.Value.A(l1.W.r.P)
+
+//let l2 = FeedforwardLayer.createRandomLayer 2048 2048 relu
+//let l3 = FeedforwardLayer.createRandomLayer 2048 2048 relu
+//let l4 = FeedforwardLayer.createRandomLayer 10 2048 clipped_sigmoid
 
 let l1 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) false |> fun x -> FeedforwardLayer.fromArray x relu
 let l2 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) false |> fun x -> FeedforwardLayer.fromArray x relu
-let l3 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl3")) false |> fun x -> FeedforwardLayer.fromArray x clipped_sigmoid
+let l3 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl3")) false |> fun x -> FeedforwardLayer.fromArray x relu
+let l4 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl4")) false |> fun x -> FeedforwardLayer.fromArray x clipped_sigmoid
 
-//let l1 = FeedforwardLayer.createRandomLayer 2048 784 relu
-//let l2 = FeedforwardLayer.createRandomLayer 2048 2048 relu
-//let l3 = FeedforwardLayer.createRandomLayer 10 2048 clipped_sigmoid
+
 //
 //save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) l1.ToArray
 //save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) l2.ToArray
 //save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl3")) l3.ToArray
+//save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl4")) l4.ToArray
 
 //let l4 = FeedforwardLayer.createRandomLayer 10 1024 (clipped_steep_sigmoid 3.0f)
-let layers = [|l1;l2;l3|]
+let layers = [|l1;l2;l3;l4|]
 
 // This does not actually train it, it just initiates the tree for later training.
 let training_loop (data: DM) (targets: DM) (layers: FeedforwardLayer[]) =
@@ -97,30 +104,28 @@ let train_mnist_sgd num_iters learning_rate (layers: FeedforwardLayer[]) =
             tape.Clear 0 // Clears the tape without disposing it or the memory buffer. It allows reuse of memory for a 100% gain in speed for the simple recurrent and feedforward case.
 
         printfn "The training cost at iteration %i is %f" i r'
-//        let r1 = r'
-//        r' <- 0.0f
-//        let mutable acc = 0.0f
-//
-//        for x in dtest do
-//            let data, target = x
-//            let lazy_acc,r = training_loop data target layers // Builds the tape.
-//
-//            tape.forwardpropTape 0 // Calculates the forward values. Triggers the ff() closures.
-//            r' <- r' + (!r.r.P/ float32 dtest.Length) // Adds the cost to the accumulator.
-//            acc <- acc+lazy_acc.Value // Here the accuracy calculation is triggered by accessing it through the Lazy property.
-//
-//            if System.Single.IsNaN r' then failwith "Nan error"
-//
-//            tape.Clear 0 // Clears the tape without disposing it or the memory buffer. It allows reuse of memory for a 100% gain in speed.
-//
-//        printfn "The validation cost at iteration %i is %f" i r'
-//        printfn "The accuracy is %i/10000" (int acc)
-//        let r2 = r'
-//        r' <- 0.0f
-//        yield r1,r2
-    yield 1
+        let r1 = r'
+        r' <- 0.0f
+        let mutable acc = 0.0f
+
+        for x in dtest do
+            let data, target = x
+            let lazy_acc,r = training_loop data target layers // Builds the tape.
+
+            tape.forwardpropTape 0 // Calculates the forward values. Triggers the ff() closures.
+            r' <- r' + (!r.r.P/ float32 dtest.Length) // Adds the cost to the accumulator.
+            acc <- acc+lazy_acc.Value // Here the accuracy calculation is triggered by accessing it through the Lazy property.
+
+            if System.Single.IsNaN r' then failwith "Nan error"
+
+            tape.Clear 0 // Clears the tape without disposing it or the memory buffer. It allows reuse of memory for a 100% gain in speed.
+
+        printfn "The validation cost at iteration %i is %f" i r'
+        printfn "The accuracy is %i/10000" (int acc)
+        let r2 = r'
+        yield r1,r2
     |]
-let num_iters = 15
+let num_iters = 10
 let learning_rate = 0.03f
 let s = train_mnist_sgd num_iters learning_rate layers
 
