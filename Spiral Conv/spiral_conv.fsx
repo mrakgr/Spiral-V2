@@ -256,13 +256,15 @@ type ObjectPool() =
             t
 
     member t.getWorkspace n = 
-        let t' = ObjectPool.getFromPool workspacePool wp (fun _ -> new_dev<byte> n)
-        if int t'.Size < n then // Resize the object if less than n
-            t'.Dispose()
-            let t'' = new_dev<byte> n
-            workspacePool.[!wp-1] <- t''
-            t''
-        else t'
+        if n > 0 then
+            let t' = ObjectPool.getFromPool workspacePool wp (fun _ -> new_dev<byte> n)
+            if int t'.Size < n then // Resize the object if less than n
+                t'.Dispose()
+                let t'' = new_dev<byte> n
+                workspacePool.[!wp-1] <- t''
+                t''
+            else t'
+        else CudaDeviceVariable.Null
     member t.getd4M is_constant (n:int,c:int,h:int,w:int as p) =
         let t' = 
             match is_constant with
@@ -820,7 +822,7 @@ type DeviceTrinaryCoefTransformModule(op: string, unique_name) =
             IO.File.WriteAllBytes(kernel_path,ptx)
             ctx.LoadKernelPTX(ptx,kernel_name)
 
-    member inline t.A(coef_x: float32, (x_nchw, x: CudaDeviceVariable<float32>), coef_y: float32, (y_nchw, y: CudaDeviceVariable<float32>), coef_z: float32, (z_nchw, z: CudaDeviceVariable<float32>), (o_nchw, o: CudaDeviceVariable<float32>,n)) =
+    member inline t.A(coef_x: float32, (x_nchw, x: CudaDeviceVariable<float32>), coef_y: float32, (y_nchw, y: CudaDeviceVariable<float32>), coef_z: float32, (z_nchw, z: CudaDeviceVariable<float32>), (o_nchw, o: CudaDeviceVariable<float32>)) =
         if x_nchw <> y_nchw then failwith "x_nchw <> y_nchw in DeviceTrinaryCoefTransformModule"
         if y_nchw <> z_nchw then failwith "y_nchw <> z_nchw in DeviceTrinaryCoefTransformModule"
         if z_nchw <> o_nchw then failwith "z_nchw <> o_nchw in DeviceTrinaryCoefTransformModule"
@@ -928,33 +930,33 @@ let saxpy (alpha:float32) (x_nchw, x:CudaDeviceVariable<float32>) (y_nchw, y:Cud
     cublas.Axpy(alpha,x,1,y,1)
 
 /// General matrix-matrix addition. Inplace version.
-/// N and C dimensions are restricted to 1 in this as the function is intended to be used for transposes.
+/// The function is not indented for transposes due to dimensional confusion.
 #nowarn "49"
-let geam transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_rows, A_num_cols), A:CudaDeviceVariable<float32>) beta ((B_num_images, B_num_channels, B_num_rows, B_num_cols), B:CudaDeviceVariable<float32>) ((C_num_images, C_num_channels, C_num_rows, C_num_cols), C:CudaDeviceVariable<float32>) =
-    if A_num_images <> 1 || A_num_channels <> 1 then failwith "A_num_images <> 1 || A_num_channels <> 1"
-    if B_num_images <> 1 || B_num_channels <> 1 then failwith "B_num_images <> 1 || B_num_channels <> 1"
-    if C_num_images <> 1 || C_num_channels <> 1 then failwith "C_num_images <> 1 || C_num_channels <> 1"
-
-    let a_row = if transa = nT then A_num_rows else A_num_cols
-    let a_col = if transa = nT then A_num_cols else A_num_rows
-    let b_row = if transb = nT then B_num_rows else B_num_cols
-    let b_col = if transb = nT then B_num_cols else B_num_rows
+let private geam transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_rows, A_num_cols as A_nchw), A:CudaDeviceVariable<float32>) beta ((B_num_images, B_num_channels, B_num_rows, B_num_cols as B_nchw), B:CudaDeviceVariable<float32>) ((C_num_images, C_num_channels, C_num_rows, C_num_cols as C_nchw), C:CudaDeviceVariable<float32>) =
+    let inline geam (A_num_rows, A_num_cols) (B_num_rows, B_num_cols) (C_num_rows, C_num_cols) =
+        let a_row = if transa = nT then A_num_rows else A_num_cols
+        let a_col = if transa = nT then A_num_cols else A_num_rows
+        let b_row = if transb = nT then B_num_rows else B_num_cols
+        let b_col = if transb = nT then B_num_cols else B_num_rows
         
-    if a_row <> b_row then failwith (sprintf "a_row <> b_row in geam2! %i <> %i" a_row b_row)
-    if a_col <> b_col then failwith (sprintf "a_col <> b_col in geam2! %i <> %i" a_col b_col)
+        if a_row <> b_row then failwith (sprintf "a_row <> b_row in geam! %i <> %i" a_row b_row)
+        if a_col <> b_col then failwith (sprintf "a_col <> b_col in geam! %i <> %i" a_col b_col)
 
-    if a_row <> C_num_rows then failwith (sprintf "a_row <> C_num_rows in geam2! %i <> %i" a_col b_col)
-    if a_col <> C_num_cols then failwith (sprintf "a_col <> C_num_cols in geam2! %i <> %i" a_col b_col)
+        if a_row <> C_num_rows then failwith (sprintf "a_row <> C_num_rows in geam! %i <> %i" a_col C_num_rows)
+        if a_col <> C_num_cols then failwith (sprintf "a_col <> C_num_cols in geam! %i <> %i" a_col C_num_cols)
 
-    let lda = if transa = nT then a_row else a_col
-    let ldb = if transa = nT then b_row else b_col
-    let ldc = a_row
+        let lda = if transa = nT then a_row else a_col
+        let ldb = if transa = nT then b_row else b_col
+        let ldc = a_row
 
-    cublas.Geam(transa, transb, a_row, a_col, alpha, A, lda, B, ldb, beta, C, ldc)
+        cublas.Geam(transa, transb, a_row, a_col, alpha, A, lda, B, ldb, beta, C, ldc)
+
+    geam (A_num_channels*A_num_cols*A_num_rows,A_num_images) (B_num_channels*B_num_cols*B_num_rows,B_num_images) (C_num_channels*C_num_cols*C_num_rows,C_num_images)
 
 /// General matrix-matrix multiply from cuBLAS. Inplace version
-let gemm transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_rows, A_num_cols), A:CudaDeviceVariable<float32>) ((B_num_images, B_num_channels, B_num_rows, B_num_cols), B:CudaDeviceVariable<float32>) beta ((C_num_images, C_num_channels, C_num_rows, C_num_cols), C:CudaDeviceVariable<float32>) =
-    let gemm (A_num_rows, A_num_cols) (B_num_rows, B_num_cols) (C_num_rows, C_num_cols) =
+/// c,h,w get multiplied together to form the first dimension. n is the second dimension.
+let private gemm transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_rows, A_num_cols), A:CudaDeviceVariable<float32>) ((B_num_images, B_num_channels, B_num_rows, B_num_cols), B:CudaDeviceVariable<float32>) beta ((C_num_images, C_num_channels, C_num_rows, C_num_cols), C:CudaDeviceVariable<float32>) =
+    let inline gemm (A_num_rows, A_num_cols) (B_num_rows, B_num_cols) (C_num_rows, C_num_cols) =
         let a_col = if transa = nT then A_num_cols else A_num_rows
         let b_row = if transb = nT then B_num_rows else B_num_cols
         if a_col <> b_row then failwithf "a_col <> b_row in gemm! %i <> %i" a_col b_row
@@ -972,20 +974,29 @@ let gemm transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_ro
     gemm (A_num_channels*A_num_cols*A_num_rows,A_num_images) (B_num_channels*B_num_cols*B_num_rows,B_num_images) (C_num_channels*C_num_cols*C_num_rows,C_num_images)
 
 /// Matrix-matrix multiply.
-let matmult (a: d4M) (b:d4M) =
+let inline private matmult' (prev_output : d4M option) ((a,b): d4M*d4M) =
     let c = 
-        let num_rows = a.num_channels*a.num_cols*a.num_rows
-        let num_cols = b.num_images
-        ObjectPool.getd4M false (num_cols,num_rows,1,1)
-        
-    gemm nT nT 1.0f a.P' b.P' 0.0f c.P'
+        match prev_output with
+        | None ->
+            let num_rows = a.num_channels*a.num_cols*a.num_rows
+            let num_cols = b.num_images
+            ObjectPool.getd4M false (num_cols,num_rows,1,1)
+            |> fun c ->
+                gemm nT nT 1.0f a.P' b.P' 0.0f c.P'
+                c
+        | Some c ->
+            gemm nT nT 1.0f a.P' b.P' 1.0f c.P'
+            c
 
-    let matmult_backward_left () = gemm nT T 1.0f c.A' b.P' 1.0f a.A'
-    let matmult_backward_right () = gemm T nT 1.0f a.A' c.A' 1.0f b.A'
-    if a.A.IsSome then tape.Push(matmult_backward_left)
-    if b.A.IsSome then tape.Push(matmult_backward_right)
-    c
+    if a.A.IsSome then 
+        let matmult_backward_left () = gemm nT T 1.0f c.A' b.P' 1.0f a.A'
+        tape.Push(matmult_backward_left)
+    if b.A.IsSome then 
+        let matmult_backward_right () = gemm T nT 1.0f a.P' c.A' 1.0f b.A'
+        tape.Push(matmult_backward_right)
+    Some c
 
+let matmult (a: d4M) (b:d4M) = matmult' None (a, b) |> fun x -> x.Value
 
 /// Can be used to add matrices or for (4D)matrix-vector broadcast addition.
 /// The output dimensions are based on the left argument.
@@ -996,24 +1007,39 @@ let inline private tensor_add' add_to_left alpha (left : d4M) beta (right : d4M)
     let rightDesc = ObjectPool.getTensorDescriptor
     right.nchw |> rightDesc.SetTensor4dDescriptor
 
-    let output = if add_to_left = false then left.nchw |> ObjectPool.getd4M false else left
+    let output = 
+        if add_to_left = false 
+        then 
+            left.nchw |> ObjectPool.getd4M false 
+            |> fun output -> cudnn.AddTensor(alpha,leftDesc,left.P,0.0f,leftDesc,output.P); output // Copy the left to output
+        else 
+            left
 
-    cudnn.AddTensor(alpha,leftDesc,left.P,0.0f,leftDesc,output.P)
-    cudnn.AddTensor(beta,rightDesc,right.P,1.0f,leftDesc,output.P)
+    cudnn.AddTensor(beta,rightDesc,right.P,1.0f,leftDesc,output.P) // Add right to output.
 
-    let tensor_add_right_backwards () = 
-        if left.nchw = right.nchw then
-            saxpy beta output.A' right.A'
-        else
-            cudnn.ConvolutionBackwardBias(beta,leftDesc,output.A.Value,1.0f,rightDesc,right.A.Value)
-    let tensor_add_left_backwards () = 
-        saxpy alpha output.A' left.A'
+    if right.A.IsSome then 
+        let tensor_add_right_backwards () = 
+            if left.nchw = right.nchw then
+                saxpy beta output.A' right.A'
+            else
+                cudnn.ConvolutionBackwardBias(beta,leftDesc,output.A.Value,1.0f,rightDesc,right.A.Value)
+        tape.Push(tensor_add_right_backwards)
 
-    if right.A.IsSome then tape.Push(tensor_add_right_backwards)
-    if add_to_left = false && left.A.IsSome then tape.Push(tensor_add_left_backwards)
+    if add_to_left = false && left.A.IsSome then 
+        let tensor_add_left_backwards () = saxpy alpha output.A' left.A'
+        tape.Push(tensor_add_left_backwards)
     output
 
 let tensor_add = tensor_add' false
+
+let linear_layer_matmult (mm: (d4M*d4M) []) (bias: d4M option) =
+    mm
+    |> Array.fold matmult' None
+    |> fun (output) ->
+        let left = output.Value
+        match bias with
+        | None -> left
+        | Some right -> tensor_add' true 1.0f left 1.0f right
 
 /// The activation function. Zeroes out the target primal during the call.
 let activation_forward mode (input : d4M)  =
@@ -1028,10 +1054,11 @@ let activation_forward mode (input : d4M)  =
 
     cudnn.ActivationForward(mode,alpha,srcTensorDesc,input.P,0.0f,srcTensorDesc,output.P)
 
-    let activation_backward () =
-        cudnn.ActivationBackward(mode,alpha,srcTensorDesc,output.P,srcTensorDesc,output.A.Value,srcTensorDesc,input.P,beta,srcTensorDesc,input.A.Value)
-
-    if input.A.IsSome then tape.Push(activation_backward)
+    if input.A.IsSome then 
+        let activation_backward () =
+            cudnn.ActivationBackward(mode,alpha,srcTensorDesc,output.P,srcTensorDesc,output.A.Value,
+                                     srcTensorDesc,input.P,beta,srcTensorDesc,input.A.Value)
+        tape.Push(activation_backward)
     output
 
 /// The pooling function. Zeroes out the target primal during the call.
@@ -1059,41 +1086,12 @@ let pooling_forward p (input : d4M) =
 
     cudnn.PoolingForward(poolingDescriptor,alpha,srcTensorDesc,input.P,0.0f,dstTensorDesc,output.P)
 
-    let pooling_backward () =
-        cudnn.PoolingBackward(poolingDescriptor,alpha,srcTensorDesc,output.P,srcTensorDesc,output.A.Value,dstTensorDesc,input.P,beta,dstTensorDesc,input.A.Value)
-
-    if input.A.IsSome then tape.Push(pooling_backward)
+    if input.A.IsSome then 
+        let pooling_backward () =
+            cudnn.PoolingBackward(poolingDescriptor,alpha,srcTensorDesc,output.P,srcTensorDesc,
+                                  output.A.Value,dstTensorDesc,input.P,beta,dstTensorDesc,input.A.Value)
+        tape.Push(pooling_backward)
     output
-
-let squareModule = lazy new DeviceUnaryTransformModule("x*x;","Square")
-//y = error
-//z = previous adjoint value
-let squareErrorModule = lazy new DeviceTrinaryTransformModule("2.0f*x*y + z;","SquareError")
-let square (a:d4M) =
-    let c = a.nchw |> ObjectPool.getd4M false
-    squareModule.Value.A(a.P',c.P')
-
-    let square_backward () = squareErrorModule.Value.A(a.P',c.A',a.A',a.A')
-    if a.A.IsSome then tape.Push square_backward
-    c
-
-let sumModule = lazy new DeviceUnaryMapSumModule("x;", "Sum")
-let sumErrorModule = lazy new DeviceUnaryCoefTransformModule("coef_x + x;", "SumError")
-let sum (a:d4M) =
-    let c = Df.create (ref 0.0f)
-    c.P := sumModule.Value.A(a.P')
-
-    let sum_backward () = sumErrorModule.Value.A(!c.A,a.A',a.A')
-    if a.A.IsSome then tape.Push sum_backward
-    c
-
-let scale (alpha: float32) (a:Df) =
-    let c = Df.create (ref 0.0f)
-    c.P := alpha * !a.P
-
-    let scale_backward () = a.A := alpha * !c.A + !a.A
-    tape.Push scale_backward
-    c
 
 let inline private convolutional_forward' (prev_output: ((int*int*int*int)*d4M) option) (convPar, data : d4M, filter : d4M) =
     let data_sizes = data.nchw
@@ -1115,8 +1113,9 @@ let inline private convolutional_forward' (prev_output: ((int*int*int*int)*d4M) 
             if dims <> prev_dims then failwith "dims <> prev_dims in linear_layer_conv"
             prev_dims, prev_output
         | None ->
-            dims |> dstTensorDesc.SetTensor4dDescriptor
             dims, dims |> ObjectPool.getd4M false
+
+    dims |> dstTensorDesc.SetTensor4dDescriptor
 
     let algo = cudnn.GetConvolutionForwardAlgorithm(srcTensorDesc,filterDesc,convDesc,dstTensorDesc,cudnnConvolutionFwdPreference.PreferFastest,SizeT 0)
     let workspace = 
@@ -1126,24 +1125,27 @@ let inline private convolutional_forward' (prev_output: ((int*int*int*int)*d4M) 
     let alpha = 1.0f
     let beta = 1.0f
 
-    cudnn.ConvolutionForward(alpha,srcTensorDesc,data.P,filterDesc,filter.P,convDesc,algo,workspace,0.0f,dstTensorDesc,output.P)
+    match prev_output with
+    | None -> cudnn.ConvolutionForward(alpha,srcTensorDesc,data.P,filterDesc,filter.P,convDesc,algo,workspace,0.0f,dstTensorDesc,output.P)
+    | Some _ -> cudnn.ConvolutionForward(alpha,srcTensorDesc,data.P,filterDesc,filter.P,convDesc,algo,workspace,1.0f,dstTensorDesc,output.P) // Don't zero out the previous output.
 
-    let convolution_backwards_filter () =
-        let algo = cudnn.GetConvolutionBackwardFilterAlgorithm(srcTensorDesc,dstTensorDesc,convDesc,filterDesc,cudnnConvolutionBwdFilterPreference.PreferFastest,SizeT 0)
-        let workspace =
-            cudnn.GetConvolutionBackwardFilterWorkspaceSize(srcTensorDesc,dstTensorDesc,convDesc,filterDesc,algo) |> int
-            |> ObjectPool.getWorkspace
-        cudnn.ConvolutionBackwardFilter(alpha,srcTensorDesc,data.P,dstTensorDesc,output.A.Value,convDesc,algo,workspace,beta,filterDesc,filter.A.Value)
+    if filter.A.IsSome then 
+        let convolution_backwards_filter () =
+            let algo = cudnn.GetConvolutionBackwardFilterAlgorithm(srcTensorDesc,dstTensorDesc,convDesc,filterDesc,cudnnConvolutionBwdFilterPreference.PreferFastest,SizeT 0)
+            let workspace =
+                cudnn.GetConvolutionBackwardFilterWorkspaceSize(srcTensorDesc,dstTensorDesc,convDesc,filterDesc,algo) |> int
+                |> ObjectPool.getWorkspace
+            cudnn.ConvolutionBackwardFilter(alpha,srcTensorDesc,data.P,dstTensorDesc,output.A.Value,convDesc,algo,workspace,beta,filterDesc,filter.A.Value)
+        tape.Push(convolution_backwards_filter)
 
-    let convolution_backwards_data () =
-        let algo = cudnn.GetConvolutionBackwardDataAlgorithm(filterDesc,dstTensorDesc,convDesc,srcTensorDesc,cudnnConvolutionBwdDataPreference.PreferFastest,SizeT 0)
-        let workspace =
-            cudnn.GetConvolutionBackwardDataWorkspaceSize(filterDesc,dstTensorDesc,convDesc,srcTensorDesc,algo) |> int
-            |> ObjectPool.getWorkspace
-        cudnn.ConvolutionBackwardData(alpha,filterDesc,filter.P,dstTensorDesc,output.A.Value,convDesc,beta,algo,workspace,srcTensorDesc,data.A.Value)
-
-    if filter.A.IsSome then tape.Push(convolution_backwards_filter)
-    if data.A.IsSome then tape.Push(convolution_backwards_data)
+    if data.A.IsSome then 
+        let convolution_backwards_data () =
+            let algo = cudnn.GetConvolutionBackwardDataAlgorithm(filterDesc,dstTensorDesc,convDesc,srcTensorDesc,cudnnConvolutionBwdDataPreference.PreferFastest,SizeT 0)
+            let workspace =
+                cudnn.GetConvolutionBackwardDataWorkspaceSize(filterDesc,dstTensorDesc,convDesc,srcTensorDesc,algo) |> int
+                |> ObjectPool.getWorkspace
+            cudnn.ConvolutionBackwardData(alpha,filterDesc,filter.P,dstTensorDesc,output.A.Value,convDesc,beta,algo,workspace,srcTensorDesc,data.A.Value)
+        tape.Push(convolution_backwards_data)
 
     (dims,output) |> Some
 
@@ -1167,25 +1169,114 @@ let hadamaradMultiplicationErrorModule = lazy new DeviceTrinaryTransformModule("
 let inline private hadmult' (prev_output : d4M option) ((a,b): d4M*d4M) =
     let c = 
         match prev_output with
-        | Some v -> v
-        | None -> ObjectPool.getd4M false a.nchw
+        | Some c -> 
+            hadamaradMultiplicationErrorModule.Value.A(a.P', b.P', c.P', c.P'); c
+        | None -> 
+            ObjectPool.getd4M false a.nchw
+            |> fun c -> hadamaradMultiplicationModule.Value.A(a.P', b.P', c.P'); c
 
-    hadamaradMultiplicationModule.Value.A(a.P', b.P', c.P')
-
-    let hadmult_backward_left () = hadamaradMultiplicationErrorModule.Value.A(b.P',c.A',a.A',a.A')
-    let hadmult_backward_right () = hadamaradMultiplicationErrorModule.Value.A(a.P',c.A',b.A',b.A')
-    if a.A.IsSome then tape.Push hadmult_backward_left
-    if b.A.IsSome then tape.Push hadmult_backward_right
+    if a.A.IsSome then 
+        let hadmult_backward_left () = hadamaradMultiplicationErrorModule.Value.A(b.P',c.A',a.A',a.A')
+        tape.Push hadmult_backward_left
+    if b.A.IsSome then 
+        let hadmult_backward_right () = hadamaradMultiplicationErrorModule.Value.A(a.P',c.A',b.A',b.A')
+        tape.Push hadmult_backward_right
     Some c
 
 let hadmult (a: d4M) (b: d4M) = hadmult' None (a, b) |> fun x -> x.Value
-let linear_layer_hadmult (hads: (d4M*d4M)[]) = hads |> Array.fold hadmult' None
+let linear_layer_hadmult (hads: (d4M*d4M)[]) = hads |> Array.fold hadmult' None |> fun x -> x.Value
+
+let squareModule = lazy new DeviceUnaryTransformModule("x*x;","Square")
+//y = error
+//z = previous adjoint value
+let squareErrorModule = lazy new DeviceTrinaryTransformModule("2.0f*x*y + z;","SquareError")
+let square (a:d4M) =
+    let c = a.nchw |> ObjectPool.getd4M false
+    squareModule.Value.A(a.P',c.P')
+
+    if a.A.IsSome then 
+        let square_backward () = squareErrorModule.Value.A(a.P',c.A',a.A',a.A')
+        tape.Push square_backward
+    c
+
+let sumModule = lazy new DeviceUnaryMapSumModule("x;", "Sum")
+let sumErrorModule = lazy new DeviceUnaryCoefTransformModule("coef_x + x;", "SumError")
+let sum (a:d4M) =
+    let c = Df.create (ref 0.0f)
+    c.P := sumModule.Value.A(a.P')
+
+    if a.A.IsSome then 
+        let sum_backward () = sumErrorModule.Value.A(!c.A,a.A',a.A')
+        tape.Push sum_backward
+    c
+
+let scale (alpha: float32) (a:Df) =
+    let c = Df.create (ref 0.0f)
+    c.P := alpha * !a.P
+
+    let scale_backward () = a.A := alpha * !c.A + !a.A
+    tape.Push scale_backward
+    c
+
+let logModule = lazy new DeviceUnaryTransformModule("logf(x);","Log")
+//y=error
+//z=previous adjoint
+let logErrorModule = lazy new DeviceTrinaryTransformModule("y / x + z;","LogError")
+let log_ (a:d4M) =
+    let c = ObjectPool.getd4M false a.nchw
+
+    logModule.Value.A(a.P',c.P')
+
+    if a.A.IsSome then
+        let log_backward () = logErrorModule.Value.A(a.P',c.A', a.A', a.A')
+        tape.Push log_backward
+    c
+
+//coef_x = scalar
+//coef_y = coef
+let scalarMatrixAddModule = lazy new DeviceBinaryCoefTransformModule("coef_x + coef_y*x;","ScalarMatrixAdd")
+/// o <- scalar + coef*a
+let scalar_matrix_add scalar coef (a:d4M) =
+    let c = ObjectPool.getd4M false a.nchw
+
+    scalarMatrixAddModule.Value.A(scalar,a.P',coef,a.P',c.P')
+
+    if a.A.IsSome then
+        let scalar_matrix_add_backward () = geam nT nT coef c.A' 1.0f a.A' a.A'
+        tape.Push scalar_matrix_add_backward
+    c
+
+let clipModule = lazy new DeviceTrinaryCoefTransformModule("((x < coef_x) ? coef_x : (x > coef_y ? coef_y : x))+coef_z;","Clip")
+let clipErrorModule = lazy new DeviceTrinaryCoefTransformModule("y*((x < coef_x) ? 0.0f : (x > coef_y ? 0.0f : 1.0f))+z;","ClipError")
+/// o <- clip(min,max,a)+scalar
+/// The clip function. Can be used as Relu by setting max to positive infinity. 
+/// Can be used to make linear clipped sigmoid by setting min,max,scalar to -0.5f,0.5f,0.5f.
+let clip min max (a : d4M) scalar =
+    let c = ObjectPool.getd4M false a.nchw
+
+    clipModule.Value.A(min,a.P',max,a.P',scalar,a.P',c.P')
+
+    if a.A.IsSome then
+        let clip_backward () = 
+            clipErrorModule.Value.A(min,a.P',max,c.A',max,a.A',a.A')
+        tape.Push clip_backward
+    c
+
+let inline relu x = activation_forward ManagedCuda.CudaDNN.cudnnActivationMode.Relu x
+let inline sigmoid x = activation_forward cudnnActivationMode.Sigmoid x
+let inline tanh_ x = activation_forward cudnnActivationMode.Tanh x
+let inline clipped_sigmoid x = clip 0.0001f 0.9999f (sigmoid x) 0.0f
 
 let squared_error_cost target activations =
     tensor_add 1.0f target -1.0f activations
     |> square
     |> sum
     |> scale (0.5f/ float32 target.num_images)
+
+let cross_entropy_cost target activations =
+    linear_layer_hadmult [|target,log_ activations;scalar_matrix_add 1.0f -1.0f target, log_ (scalar_matrix_add 1.0f -1.0f activations)|]
+    |> sum
+    |> scale (-1.0f/float32 target.num_images)
 
 
 let maxColumnModule = lazy new DeviceMaxColumnActivationModule()
@@ -1205,9 +1296,9 @@ type d4M with
 // A convolutional feedforward layer of neurons
 type ConvolutionalFeedforwardLayer =
     {
-    W:d4M  // Input weight matrix
-    b:d4M  // Bias vector
-    a:cudnnActivationMode
+    W : d4M  // Input weight matrix
+    b : d4M  // Bias vector
+    a : d4M -> d4M
     } with     // Activation function
      
     static member fromArray (a : d4M[]) act =
@@ -1224,13 +1315,13 @@ type ConvolutionalFeedforwardLayer =
          a = act
         } 
 
-    member l.runLayer (convPar,x:d4M) =
-        //linear_layer_matmult [|l.W,x|] (Some l.b) |> l.a // TODO: Make optimize linear layer functions.
+    member l.runLayer (convPars,x:d4M) =
+        //linear_layer_matmult [|l.W,x|] (Some l.b) // This is a nonconvolutional layer
         //matmult l.W x
 //        convolution_forward convPar x l.W
-//        |> fun x -> tensor_add 1.0f x 1.0f l.b
-        linear_layer_conv [|convPar,x,l.W|] (Some l.b)
-        |> activation_forward l.a
+        //|> fun x -> tensor_add 1.0f x 1.0f l.b
+        linear_layer_conv [|convPars,x,l.W|] (Some l.b)
+        |> l.a
 
     member l.ToArray = [|l.W;l.b|]
     member t.ResetAdjoints () = t.W.setZeroAdjoint(); t.b.setZeroAdjoint()
@@ -1239,9 +1330,9 @@ type ConvolutionalFeedforwardLayer =
 // A fully connected feedforward layer of neurons
 type FeedforwardLayer =
     {
-    W:d4M  // Input weight matrix
-    b:d4M  // Bias vector
-    a:cudnnActivationMode
+    W : d4M  // Input weight matrix
+    b : d4M  // Bias vector
+    a : d4M -> d4M
     } with     // Activation function
      
     static member fromArray (a : d4M[]) act =
@@ -1258,10 +1349,8 @@ type FeedforwardLayer =
          a = act
         } 
 
-    member l.runLayer (convPar,x:d4M) =
-        matmult l.W x
-        |> fun x -> tensor_add 1.0f x 1.0f l.b
-        |> activation_forward l.a
+    member l.runLayer (x:d4M) =
+        linear_layer_matmult [|l.W,x|] (Some l.b) |> l.a
 
     member l.ToArray = [|l.W;l.b|]
     member t.ResetAdjoints () = t.W.setZeroAdjoint(); t.b.setZeroAdjoint()

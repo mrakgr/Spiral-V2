@@ -1,4 +1,5 @@
-﻿// I think I finally got all the bugs out. Let me try it. I expect I will be able to break 99% with this.
+﻿// Let me see if I can get to 98% using fully connected convolutional filters. If I can I'll call this a success and give it a rest. I cannot get
+// gemm and convolution forward to alight. I am not sure whether that is due to inherent differences or bugs.
 
 open System
 open System.IO
@@ -32,7 +33,7 @@ let load_mnist filename =
         d.ReadBytes(n * rows * cols)
         |> Array.map (fun x -> float32 x / 255.0f)
         |> Array.chunkBySize (minibatch_size*rows*cols)
-        |> Array.map (fun x -> d4M.createConstant (x.Length/(rows*cols),1,rows,cols,x))
+        |> Array.map (fun x -> d4M.createConstant (x.Length/(rows*cols),rows*cols,1,1,x))
     | _ -> failwith "Given file is not in the MNIST format."
 
 let [|test_images;test_labels;train_images;train_labels|] = 
@@ -40,29 +41,27 @@ let [|test_images;test_labels;train_images;train_labels|] =
     |> Array.map (fun x -> Path.Combine(__SOURCE_DIRECTORY__,x) |> load_mnist)
 
 
-let l1 = ConvolutionalFeedforwardLayer.createRandomLayer (128,1,5,5) relu
-let l2 = ConvolutionalFeedforwardLayer.createRandomLayer (128,128,5,5) relu
-let l3 = ConvolutionalFeedforwardLayer.createRandomLayer (128,128,5,5) relu
-let l4 = ConvolutionalFeedforwardLayer.createRandomLayer (128,128,5,5) relu
-let l5 = ConvolutionalFeedforwardLayer.createRandomLayer (10,128,4,4) clipped_sigmoid
+let l1 = ConvolutionalFeedforwardLayer.createRandomLayer (2024,784,1,1) relu
+let l2 = ConvolutionalFeedforwardLayer.createRandomLayer (2024,2024,1,1) relu
+let l3 = ConvolutionalFeedforwardLayer.createRandomLayer (2024,2024,1,1) relu
+let l4 = ConvolutionalFeedforwardLayer.createRandomLayer (10,2024,1,1) clipped_sigmoid
 
-let base_nodes = [|l1;l2;l3;l4;l5|]
+let base_nodes = [|l1;l2;l3;l4|]
 
 let training_loop label data = // For now, this is just checking if the new library can overfit on a single minibatch.
     [|
     defaultConvPar,l1
     defaultConvPar,l2
-    {defaultConvPar with stride_h=2; stride_w=2},l3
+    defaultConvPar,l3
     defaultConvPar,l4
-    defaultConvPar,l5
     |] 
     |> Array.fold (fun x (convPars,layer) -> layer.runLayer (convPars,x)) data
     |> fun x -> lazy get_accuracy label x, cross_entropy_cost label x
 
-let learning_rate = 0.05f
+let learning_rate = 0.1f
 
 let test() =
-    for i=1 to 50 do
+    for i=1 to 25 do
         let mutable er = 0.0f
         for j=0 to train_images.Length-1 do
             let _,r = training_loop train_labels.[j] train_images.[j] // Forward step
@@ -90,3 +89,4 @@ let test() =
         printfn "-----"
 
 test()
+

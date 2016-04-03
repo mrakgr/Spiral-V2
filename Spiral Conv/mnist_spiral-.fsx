@@ -54,19 +54,27 @@ let [|dtest_images;test_labels;train_images;train_labels|] =
 let dtest = Array.zip dtest_images test_labels |> fun x -> x.[0..0]
 let dtrain = Array.zip train_images train_labels |> fun x -> x.[0..0]
 
-let l1 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weights")) false |> fun x -> FeedforwardLayer.fromArray x id
+let l1 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) false |> fun x -> FeedforwardLayer.fromArray x relu
+let l2 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) false |> fun x -> FeedforwardLayer.fromArray x relu
+let l3 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl3")) false |> fun x -> FeedforwardLayer.fromArray x clipped_sigmoid
 
-//let l2 = FeedforwardLayer.createRandomLayer 2048 1024 relu
-//let l3 = FeedforwardLayer.createRandomLayer 1024 2048 relu
+//let l1 = FeedforwardLayer.createRandomLayer 2048 784 relu
+//let l2 = FeedforwardLayer.createRandomLayer 2048 2048 relu
+//let l3 = FeedforwardLayer.createRandomLayer 10 2048 clipped_sigmoid
+//
+//save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) l1.ToArray
+//save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) l2.ToArray
+//save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl3")) l3.ToArray
+
 //let l4 = FeedforwardLayer.createRandomLayer 10 1024 (clipped_steep_sigmoid 3.0f)
-let layers = [|l1|]
+let layers = [|l1;l2;l3|]
 
 // This does not actually train it, it just initiates the tree for later training.
 let training_loop (data: DM) (targets: DM) (layers: FeedforwardLayer[]) =
     let outputs = layers |> Array.fold (fun state layer -> layer.runLayer state) data
     // I make the accuracy calculation lazy. This is similar to returning a lambda function that calculates the accuracy
     // although in this case it will be calculated at most once.
-    lazy get_accuracy targets.r.P outputs.r.P, squared_error_cost targets outputs 
+    lazy get_accuracy targets.r.P outputs.r.P, cross_entropy_cost targets outputs 
 
 let train_mnist_sgd num_iters learning_rate (layers: FeedforwardLayer[]) =
     [|
@@ -112,7 +120,7 @@ let train_mnist_sgd num_iters learning_rate (layers: FeedforwardLayer[]) =
 //        yield r1,r2
     yield 1
     |]
-let num_iters = 5
+let num_iters = 15
 let learning_rate = 0.03f
 let s = train_mnist_sgd num_iters learning_rate layers
 
@@ -121,26 +129,21 @@ let s = train_mnist_sgd num_iters learning_rate layers
 //let x = train_images.[0]
 //let t' = 
 //    l1.runLayer x    
+//    |> l2.runLayer
+//    |> l3.runLayer
 //    |> squared_error_cost train_labels.[0]
 //tape.forwardpropTape 0
 //l1.W.r.A.setZero() // Resets the base adjoints
 //l1.b.r.A.setZero() // Resets the base adjoints
+//l2.W.r.A.setZero() // Resets the base adjoints
+//l2.b.r.A.setZero() // Resets the base adjoints
+//l3.W.r.A.setZero() // Resets the base adjoints
+//l3.b.r.A.setZero() // Resets the base adjoints
 //tape.resetTapeAdjoint 0 // Resets the adjoints for the training select
 //t'.r.A := 1.0f
 //tape.reversepropTape 0
 //
 //add_gradients_to_weights' base_nodes learning_rate // The optimization step
+//tape.Clear 0
 //
-//let t = l1.runLayer x
-//let t'' = 
-//    t    
-//    |> squared_error_cost train_labels.[0]
-//tape.forwardpropTape 0
-//l1.W.r.A.setZero() // Resets the base adjoints
-//l1.b.r.A.setZero() // Resets the base adjoints
-//tape.resetTapeAdjoint 0 // Resets the adjoints for the training select
-//t''.r.A := 1.0f
-//tape.reversepropTape 0
-//add_gradients_to_weights' base_nodes learning_rate // The optimization step
-//
-//let z' = l1.b.r.P.Gather()
+//let z' = l2.W.r.P.Gather()

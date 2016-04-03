@@ -65,6 +65,8 @@
     <None Include="mnist_spiral-.fsx" />
     <None Include="mnist_v1.fsx" />
     <None Include="mnist_v2.fsx" />
+    <None Include="mnist_v3.fsx" />
+    <None Include="mnist_v4.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="CudaBlas">
