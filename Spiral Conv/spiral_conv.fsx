@@ -1,6 +1,6 @@
 ﻿// Basic reverse mode AD on the GPU. This v2 of Spiral is focused on convolutional operations.
 
-module Spiral
+module SpiralV2
 
 #if INTERACTIVE
 #r "../packages/ManagedCuda-75-x64.7.5.7/lib/net45/x64/ManagedCuda.dll"
@@ -954,7 +954,7 @@ let private geam transa transb (alpha: float32) ((A_num_images, A_num_channels, 
 
 /// General matrix-matrix multiply from cuBLAS. Inplace version
 /// c,h,w get multiplied together to form the first dimension. n is the second dimension.
-let private gemm transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_rows, A_num_cols), A:CudaDeviceVariable<float32>) ((B_num_images, B_num_channels, B_num_rows, B_num_cols), B:CudaDeviceVariable<float32>) beta ((C_num_images, C_num_channels, C_num_rows, C_num_cols), C:CudaDeviceVariable<float32>) =
+let inline gemm transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_rows, A_num_cols), A:CudaDeviceVariable<float32>) ((B_num_images, B_num_channels, B_num_rows, B_num_cols), B:CudaDeviceVariable<float32>) beta ((C_num_images, C_num_channels, C_num_rows, C_num_cols), C:CudaDeviceVariable<float32>) =
     let inline gemm (A_num_rows, A_num_cols) (B_num_rows, B_num_cols) (C_num_rows, C_num_cols) =
         let a_col = if transa = nT then A_num_cols else A_num_rows
         let b_row = if transb = nT then B_num_rows else B_num_cols
@@ -1267,7 +1267,7 @@ let inline tanh_ x = activation_forward cudnnActivationMode.Tanh x
 let inline clipped_sigmoid x = clip 0.0001f 0.9999f (sigmoid x) 0.0f
 
 let squared_error_cost target activations =
-    tensor_add 1.0f target -1.0f activations
+    tensor_add 1.0f target -1.0f activations // TODO: tensor_add is ungodly slow in v3.
     |> square
     |> sum
     |> scale (0.5f/ float32 target.num_images)

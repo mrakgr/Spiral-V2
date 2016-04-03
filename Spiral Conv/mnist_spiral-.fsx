@@ -55,18 +55,14 @@ let dtest = Array.zip dtest_images test_labels
 let dtrain = Array.zip train_images train_labels
 
 let l1 = FeedforwardLayer.createRandomLayer 2048 784 relu
-sumModule.Value.A(l1.W.r.P)
+let l2 = FeedforwardLayer.createRandomLayer 2048 2048 relu
+let l3 = FeedforwardLayer.createRandomLayer 2048 2048 relu
+let l4 = FeedforwardLayer.createRandomLayer 10 2048 clipped_sigmoid
 
-//let l2 = FeedforwardLayer.createRandomLayer 2048 2048 relu
-//let l3 = FeedforwardLayer.createRandomLayer 2048 2048 relu
-//let l4 = FeedforwardLayer.createRandomLayer 10 2048 clipped_sigmoid
-
-let l1 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) false |> fun x -> FeedforwardLayer.fromArray x relu
-let l2 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) false |> fun x -> FeedforwardLayer.fromArray x relu
-let l3 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl3")) false |> fun x -> FeedforwardLayer.fromArray x relu
-let l4 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl4")) false |> fun x -> FeedforwardLayer.fromArray x clipped_sigmoid
-
-
+//let l1 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) false |> fun x -> FeedforwardLayer.fromArray x relu
+//let l2 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) false |> fun x -> FeedforwardLayer.fromArray x relu
+//let l3 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl3")) false |> fun x -> FeedforwardLayer.fromArray x relu
+//let l4 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl4")) false |> fun x -> FeedforwardLayer.fromArray x clipped_sigmoid
 //
 //save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) l1.ToArray
 //save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) l2.ToArray

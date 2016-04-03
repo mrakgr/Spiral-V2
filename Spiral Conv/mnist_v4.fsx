@@ -6,7 +6,7 @@ open System.IO
 #if INTERACTIVE
 #load "spiral_conv.fsx"
 #endif
-open Spiral
+open SpiralV2
 
 let minibatch_size = 128
 let load_mnist filename =
@@ -40,10 +40,10 @@ let [|test_images;test_labels;train_images;train_labels|] =
     |> Array.map (fun x -> Path.Combine(__SOURCE_DIRECTORY__,x) |> load_mnist)
 
 
-let l1 = FeedforwardLayer.createRandomLayer (784,2024,1,1) relu
-let l2 = FeedforwardLayer.createRandomLayer (2024,2024,1,1) relu
-let l3 = FeedforwardLayer.createRandomLayer (2024,2024,1,1) relu
-let l4 = FeedforwardLayer.createRandomLayer (2024,10,1,1) clipped_sigmoid
+let l1 = FeedforwardLayer.createRandomLayer (784,2048,1,1) relu
+let l2 = FeedforwardLayer.createRandomLayer (2048,2048,1,1) relu
+let l3 = FeedforwardLayer.createRandomLayer (2048,2048,1,1) relu
+let l4 = FeedforwardLayer.createRandomLayer (2048,10,1,1) clipped_sigmoid
 
 //let l1 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) false |> fun x -> FeedforwardLayer.fromArray x relu
 //let l2 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) false |> fun x -> FeedforwardLayer.fromArray x relu
@@ -60,7 +60,7 @@ let training_loop label data = // For now, this is just checking if the new libr
 let learning_rate = 0.03f
 
 let test() =
-    for i=1 to 10 do
+    for i=1 to 25 do
         let mutable er = 0.0f
         for j=0 to train_images.Length-1 do
             let _,r = training_loop train_labels.[j] train_images.[j] // Forward step

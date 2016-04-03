@@ -172,6 +172,7 @@ let gemm2 transa transb (alpha: floatType) (A:dMatrix) (B:dMatrix) beta (C:dMatr
     let C_dArray = C.dArray
     if m <> C.num_rows || n <> C.num_cols then failwith "m <> C.num_rows || n <> C.num_cols in gemm2"
 
+    printfn "%i, %i, %i, 1.0f, a.P, %i, b.P, %i, 0.0f, c.P, %i" m n k lda ldb ldc
     cublas.Gemm(transa, transb, m, n, k, alpha, A.dArray, lda, B.dArray, ldb, beta, C_dArray, ldc)
 
 /// General matrix-matrix addition.
@@ -1950,10 +1951,10 @@ let cross_entropy_cost target activations =
     scale (-1.0f/floatType (target.r.P).num_cols) s
 
 let squared_error_cost target activations =
-    let r1 = add 1.0f target -1.0f activations
-    let r2 = square r1
-    let r3 = sum r2
-    scale (0.5f/floatType (target.r.P).num_cols) r3
+    add 1.0f target -1.0f activations
+    |> square 
+    |> sum 
+    |> fun x -> scale (0.5f/floatType (target.r.P).num_cols) x
 
 let maxColumnModule = lazy new DeviceMaxColumnActivationModule()
 let accuracyModule = lazy new DeviceBinaryMapSumModule "(x*y == 0.0f) ? 0.0f : 1.0f;"

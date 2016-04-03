@@ -6,7 +6,7 @@ open System.IO
 #if INTERACTIVE
 #load "spiral_conv.fsx"
 #endif
-open Spiral
+open SpiralV2
 
 let minibatch_size = 128
 let load_mnist filename =

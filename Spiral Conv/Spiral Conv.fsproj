@@ -67,6 +67,13 @@
     <None Include="mnist_v2.fsx" />
     <None Include="mnist_v3.fsx" />
     <None Include="mnist_v4.fsx" />
+    <None Include="speed_v0.fsx" />
+    <None Include="speed_v0n.fsx" />
+    <None Include="speed_v1.fsx" />
+    <None Include="speed_v1n.fsx" />
+    <None Include="speed_v2.fsx" />
+    <None Include="speed_v2n.fsx" />
+    <None Include="speed_v3n.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="CudaBlas">

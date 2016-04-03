@@ -7,7 +7,7 @@ open System.IO
 #if INTERACTIVE
 #load "spiral_conv.fsx"
 #endif
-open Spiral
+open SpiralV2
 
 let minibatch_size = 128
 let load_mnist filename =
@@ -41,10 +41,10 @@ let [|test_images;test_labels;train_images;train_labels|] =
     |> Array.map (fun x -> Path.Combine(__SOURCE_DIRECTORY__,x) |> load_mnist)
 
 
-let l1 = ConvolutionalFeedforwardLayer.createRandomLayer (2024,784,1,1) relu
-let l2 = ConvolutionalFeedforwardLayer.createRandomLayer (2024,2024,1,1) relu
-let l3 = ConvolutionalFeedforwardLayer.createRandomLayer (2024,2024,1,1) relu
-let l4 = ConvolutionalFeedforwardLayer.createRandomLayer (10,2024,1,1) clipped_sigmoid
+let l1 = ConvolutionalFeedforwardLayer.createRandomLayer (2048,784,1,1) relu
+let l2 = ConvolutionalFeedforwardLayer.createRandomLayer (2048,2048,1,1) relu
+let l3 = ConvolutionalFeedforwardLayer.createRandomLayer (2048,2048,1,1) relu
+let l4 = ConvolutionalFeedforwardLayer.createRandomLayer (10,2048,1,1) clipped_sigmoid
 
 let base_nodes = [|l1;l2;l3;l4|]
 
