@@ -62,7 +62,6 @@
     <None Include="mnist_v0.fsx" />
     <None Include="mnist_v2-.fsx" />
     <None Include="mnist_v1-.fsx" />
-    <None Include="mnist_spiral-.fsx" />
     <None Include="mnist_v1.fsx" />
     <None Include="mnist_v2.fsx" />
     <None Include="mnist_v3.fsx" />

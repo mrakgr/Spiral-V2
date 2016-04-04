@@ -1,17 +1,20 @@
-﻿// The combination of there being a bugs in both tensor_add and the gradient descent part fucking demolished me.
-// Not having negative beta combined with adding the opposite of the correct learning rate combined to make a slightly correct solution.
-// This threw off my assumptions completely and even after I realized that there was an error in tensor_add I was completely bewildered to
-// find that net was exploding after I'd fixed it. I could not go an extra step in my thinking and ended up wasting so much time.
+﻿// Spiral reverse AD example. Used for testing.
+#load "spiral.fsx"
+open Spiral
 
-// I think I now wasted an entire day hunting this thing down.
+open System
+
+open ManagedCuda
+open ManagedCuda.BasicTypes
+open ManagedCuda.VectorTypes
+open ManagedCuda.CudaBlas
+open ManagedCuda.CudaRand
+open ManagedCuda.NVRTC
+open ManagedCuda.CudaDNN
 
 open System
 open System.IO
-
-#if INTERACTIVE
-#load "spiral_conv.fsx"
-#endif
-open Spiral
+open System.Collections
 
 let minibatch_size = 128
 let load_mnist filename =
@@ -29,7 +32,9 @@ let load_mnist filename =
                 t.[int x] <- 1.0f
                 t)
         |> Array.chunkBySize (minibatch_size*10)
-        |> Array.map (fun x -> d4M.createConstant (x.Length/10,10,1,1,x))
+        |> Array.map (fun x -> 
+            dMatrix.create (10,x.Length/10,x)
+            |> DM.makeConstantNode)
     | 2051 -> // Images
         let n = d.ReadInt32() |> Net.IPAddress.NetworkToHostOrder
         let rows = d.ReadInt32() |> Net.IPAddress.NetworkToHostOrder
@@ -37,56 +42,88 @@ let load_mnist filename =
         d.ReadBytes(n * rows * cols)
         |> Array.map (fun x -> float32 x / 255.0f)
         |> Array.chunkBySize (minibatch_size*rows*cols)
-        |> Array.map (fun x -> d4M.createConstant (x.Length/(rows*cols),1,rows,cols,x))
+        |> Array.map (fun x -> 
+            dMatrix.create (rows*cols,x.Length/(rows*cols),x)
+            |> DM.makeConstantNode)
     | _ -> failwith "Given file is not in the MNIST format."
 
-let [|test_images;test_labels;train_images;train_labels|] = 
+let [|dtest_images;test_labels;train_images;train_labels|] = 
     [|"t10k-images.idx3-ubyte";"t10k-labels.idx1-ubyte";"train-images.idx3-ubyte";"train-labels.idx1-ubyte"|]
     |> Array.map (fun x -> Path.Combine(__SOURCE_DIRECTORY__,x) |> load_mnist)
 
-let relu = ManagedCuda.CudaDNN.cudnnActivationMode.Relu
-let sigmoid = ManagedCuda.CudaDNN.cudnnActivationMode.Sigmoid
+let dtest = Array.zip dtest_images test_labels 
+let dtrain = Array.zip train_images train_labels
 
-let l1 = ConvolutionalFeedforwardLayer.createRandomLayer(10,1,28,28) sigmoid
+let l1 = FeedforwardLayer.createRandomLayer 2048 784 relu
+let l2 = FeedforwardLayer.createRandomLayer 2048 2048 relu
+let l3 = FeedforwardLayer.createRandomLayer 2048 2048 relu
+let l4 = FeedforwardLayer.createRandomLayer 10 2048 clipped_sigmoid
 
-let base_nodes = [|l1|]
+//let l1 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) false |> fun x -> FeedforwardLayer.fromArray x relu
+//let l2 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) false |> fun x -> FeedforwardLayer.fromArray x relu
+//let l3 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl3")) false |> fun x -> FeedforwardLayer.fromArray x relu
+//let l4 = load_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl4")) false |> fun x -> FeedforwardLayer.fromArray x clipped_sigmoid
+//
+//save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl1")) l1.ToArray
+//save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl2")) l2.ToArray
+//save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl3")) l3.ToArray
+//save_data (IO.Path.Combine(__SOURCE_DIRECTORY__,"weightsl4")) l4.ToArray
 
-let training_loop label data = // For now, this is just checking if the new library can overfit on a single minibatch.
+//let l4 = FeedforwardLayer.createRandomLayer 10 1024 (clipped_steep_sigmoid 3.0f)
+let layers = [|l1;l2;l3;l4|]
+
+// This does not actually train it, it just initiates the tree for later training.
+let training_loop (data: DM) (targets: DM) (layers: FeedforwardLayer[]) =
+    let outputs = layers |> Array.fold (fun state layer -> layer.runLayer state) data
+    // I make the accuracy calculation lazy. This is similar to returning a lambda function that calculates the accuracy
+    // although in this case it will be calculated at most once.
+    lazy get_accuracy targets.r.P outputs.r.P, cross_entropy_cost targets outputs 
+
+let train_mnist_sgd num_iters learning_rate (layers: FeedforwardLayer[]) =
     [|
-    defaultConvPar,l1
-    |] 
-    |> Array.fold (fun x (convPars,layer) -> layer.runLayer (convPars,x)) data
-    |> fun x -> lazy get_accuracy label x, squared_error_cost label x
+    let base_nodes = layers |> Array.map (fun x -> x.ToArray) |> Array.concat // Stores all the base nodes of the layer so they can later be reset.
+    for i=1 to num_iters do
+        let mutable r' = 0.0f
+        for x in dtrain do
+            let data, target = x
+            let _,r = training_loop data target layers // Builds the tape.
 
-let learning_rate = 1.0f
+            tape.forwardpropTape 0 // Calculates the forward values. Triggers the ff() closures.
+            r' <- r' + (!r.r.P/ float32 dtrain.Length) // Adds the cost to the accumulator.
+            if System.Single.IsNaN r' then failwith "Nan error"
 
-let test() =
-    for i=1 to 100 do
-        let mutable er = 0.0f
-        for j=0 to train_images.Length-1 do
-            let _,r = training_loop train_labels.[j] train_images.[j] // Forward step
-            er <- er + !r.P
-            ObjectPool.Reset() // Resets all the adjoints from the top of the pointer in the object pool along with the pointers.
-            base_nodes |> Array.iter (fun x -> x.ResetAdjoints())
-            //printfn "Squared error cost on the minibatch is %f at batch %i" !r.P j
+            for x in base_nodes do x.r.A.setZero() // Resets the base adjoints
+            tape.resetTapeAdjoint 0 // Resets the adjoints for the training select
+            r.r.A := 1.0f // Pushes 1.0f from the top node
+            tape.reversepropTape 0 // Resets the adjoints for the test select
+            add_gradients_to_weights' base_nodes learning_rate // The optimization step
+            tape.Clear 0 // Clears the tape without disposing it or the memory buffer. It allows reuse of memory for a 100% gain in speed for the simple recurrent and feedforward case.
 
-            if !r.P |> Single.IsNaN then failwith "Nan!"
-
-            r.A := 1.0f // Loads the 1.0f at the top
-            while tape.Count > 0 do tape.Pop() |> fun x -> x() // The backpropagation step
-            base_nodes |> Array.iter (fun x -> x.SGD learning_rate) // Stochastic gradient descent.
-        printfn "-----"
-        printfn "Squared error cost on the dataset is %f at iteration %i" (er / float32 train_images.Length) i
-
+        printfn "The training cost at iteration %i is %f" i r'
+        let r1 = r'
+        r' <- 0.0f
         let mutable acc = 0.0f
-        for j=0 to test_images.Length-1 do
-            let acc',r = training_loop test_labels.[j] test_images.[j] // Forward step
-            ObjectPool.ResetPointers()
-            tape.Clear()
-            acc <- acc'.Value + acc
-    
-        printfn "Accuracy on the test set is %i/10000." (int acc)
-        printfn "-----"
 
-test()
+        for x in dtest do
+            let data, target = x
+            let lazy_acc,r = training_loop data target layers // Builds the tape.
+
+            tape.forwardpropTape 0 // Calculates the forward values. Triggers the ff() closures.
+            r' <- r' + (!r.r.P/ float32 dtest.Length) // Adds the cost to the accumulator.
+            acc <- acc+lazy_acc.Value // Here the accuracy calculation is triggered by accessing it through the Lazy property.
+
+            if System.Single.IsNaN r' then failwith "Nan error"
+
+            tape.Clear 0 // Clears the tape without disposing it or the memory buffer. It allows reuse of memory for a 100% gain in speed.
+
+        printfn "The validation cost at iteration %i is %f" i r'
+        printfn "The accuracy is %i/10000" (int acc)
+        let r2 = r'
+        yield r1,r2
+    |]
+let num_iters = 25
+let learning_rate = 0.03f
+#time
+let s = train_mnist_sgd num_iters learning_rate layers
+#time
 

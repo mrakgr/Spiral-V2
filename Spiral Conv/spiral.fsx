@@ -172,7 +172,6 @@ let gemm2 transa transb (alpha: floatType) (A:dMatrix) (B:dMatrix) beta (C:dMatr
     let C_dArray = C.dArray
     if m <> C.num_rows || n <> C.num_cols then failwith "m <> C.num_rows || n <> C.num_cols in gemm2"
 
-    printfn "%i, %i, %i, 1.0f, a.P, %i, b.P, %i, 0.0f, c.P, %i" m n k lda ldb ldc
     cublas.Gemm(transa, transb, m, n, k, alpha, A.dArray, lda, B.dArray, ldb, beta, C_dArray, ldc)
 
 /// General matrix-matrix addition.
@@ -1793,7 +1792,6 @@ let WTA k (a:DM) =
     tape.Add(t)
     t
 
-
 let add alpha (a: DM) beta (b: DM) =
     let va = a.r.P
     let vb = b.r.P
@@ -1991,7 +1989,7 @@ type FeedforwardLayer =
         } 
 
     member l.runLayer (x:DM) =
-        linear_layer_matmult [|l.W,x|] (Some l.b) |> l.a
+        linear_layer_matmult [|l.W,x|] None |> l.a
 
     member l.ToArray = 
         [|l.W;l.b|]

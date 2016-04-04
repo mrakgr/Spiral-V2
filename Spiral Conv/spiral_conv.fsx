@@ -230,97 +230,6 @@ type d4M =
                 | Some A -> A.Dispose()
                 | None -> ()
 
-type ObjectPool() =
-    let d4MPool = ResizeArray()
-    let d4Mp = ref 0
-    let workspacePool = ResizeArray()
-    let wp = ref 0
-    let tensorDescriptorPool = ResizeArray()
-    let tp = ref 0
-    let filterDescriptorPool = ResizeArray()
-    let fp = ref 0
-    let convolutionDescriptorPool = ResizeArray()
-    let cp = ref 0
-    let poolingDescriptorPool = ResizeArray()
-    let pp = ref 0
-
-    static member inline private getFromPool (pool : ResizeArray<_>) (pointer_to_pool : int ref) (creation_function) =
-        if pool.Count > !pointer_to_pool then
-            let t = pool.[!pointer_to_pool]
-            pointer_to_pool := !pointer_to_pool+1
-            t
-        else
-            let t = creation_function()
-            pool.Add(t)
-            pointer_to_pool := !pointer_to_pool+1
-            t
-
-    member t.getWorkspace n = 
-        if n > 0 then
-            let t' = ObjectPool.getFromPool workspacePool wp (fun _ -> new_dev<byte> n)
-            if int t'.Size < n then // Resize the object if less than n
-                t'.Dispose()
-                let t'' = new_dev<byte> n
-                workspacePool.[!wp-1] <- t''
-                t''
-            else t'
-        else CudaDeviceVariable.Null
-    member t.getd4M is_constant (n:int,c:int,h:int,w:int as p) =
-        let t' = 
-            match is_constant with
-            | false -> ObjectPool.getFromPool d4MPool d4Mp (fun _ -> d4M.createEmpty)
-            | true -> ObjectPool.getFromPool d4MPool d4Mp (fun _ -> d4M.createEmptyConstant)
-
-        t'.ReplaceIf p is_constant
-        t'
-
-    member t.getTensorDescriptor = ObjectPool.getFromPool tensorDescriptorPool tp (fun _ -> new TensorDescriptor())
-    member t.getFilterDescriptor = ObjectPool.getFromPool filterDescriptorPool fp (fun _ -> new FilterDescriptor())
-    member t.getConvolutionDescriptor = ObjectPool.getFromPool convolutionDescriptorPool cp (fun _ -> new ConvolutionDescriptor())
-    member t.getPoolingDescriptor = ObjectPool.getFromPool poolingDescriptorPool pp (fun _ -> new PoolingDescriptor())
-
-    /// Sets only the object pool pointers to zero.
-    member t.ResetPointers() =
-        d4Mp := 0
-        wp := 0
-        tp := 0
-        fp := 0
-        cp := 0
-        pp := 0
-
-    /// Zeroes out the adjoints in preparation for the backprop step and sets all the object pool pointers to zero.
-    member t.Reset () =
-        for i= !d4Mp-1 downto 0 do
-            let x : d4M = d4MPool.[i]
-            x.setZeroAdjoint()
-        t.ResetPointers()
-
-
-let ObjectPool = new ObjectPool() // In the past iteration of the library, the object pool's role was taken by the tape. Not anymore.
-
-type d4M with
-    /// Copies a matrix.
-    /// Uses the object pool.
-    member inline t.copy'() =
-        match t.A with
-        | Some A -> 
-            t.nchw 
-            |> ObjectPool.getd4M false
-            |> fun c ->
-                c.P.AsyncCopyToDevice(t.P,str)
-                A.AsyncCopyToDevice(A,str)
-                c
-        | None -> 
-            t.nchw 
-            |> ObjectPool.getd4M true
-            |> fun c ->
-                c.P.AsyncCopyToDevice(t.P,str)
-                c
-
-
-
-let tape = new Stack<_>(1000) // Nice and simple way of passing in the closures for the backprop step.
-
 let T = Operation.Transpose
 let nT = Operation.NonTranspose
 
@@ -385,6 +294,102 @@ type ConvolutionDescriptor with
         t.GetConvolution2dForwardOutputDim(s,f,&n,&c,&h,&w)
         n,c,h,w
 
+type ObjectPool() =
+    let d4MPool = ResizeArray()
+    let d4Mp = ref 0
+    let workspacePool = ResizeArray()
+    let wp = ref 0
+    let tensorDescriptorPool = Dictionary(HashIdentity.Structural)
+    let filterDescriptorPool = Dictionary(HashIdentity.Structural)
+    let convolutionDescriptorPool = Dictionary(HashIdentity.Structural)
+    let poolingDescriptorPool = Dictionary(HashIdentity.Structural)
+
+    static member inline private getFromPool (pool : ResizeArray<_>) (pointer_to_pool : int ref) (creation_function) =
+        if pool.Count > !pointer_to_pool then
+            let t = pool.[!pointer_to_pool]
+            pointer_to_pool := !pointer_to_pool+1
+            t
+        else
+            let t = creation_function()
+            pool.Add(t)
+            pointer_to_pool := !pointer_to_pool+1
+            t
+
+    static member inline private getFromDict (pool : Dictionary<_,_>) k creation_function set_function =
+        match pool.TryGetValue k with
+        | true, v -> v
+        | false, _ ->
+            let t = creation_function()
+            set_function t k
+            pool.Add(k, t)
+            t
+
+    member t.getWorkspace n = 
+        if n > 0 then
+            let t' = ObjectPool.getFromPool workspacePool wp (fun _ -> new_dev<byte> n)
+            if int t'.Size < n then // Resize the object if less than n
+                t'.Dispose()
+                let t'' = new_dev<byte> n
+                workspacePool.[!wp-1] <- t''
+                t''
+            else t'
+        else CudaDeviceVariable.Null
+    member t.getd4M is_constant (n:int,c:int,h:int,w:int as p) =
+        let t' = 
+            match is_constant with
+            | false -> ObjectPool.getFromPool d4MPool d4Mp (fun _ -> d4M.createEmpty)
+            | true -> ObjectPool.getFromPool d4MPool d4Mp (fun _ -> d4M.createEmptyConstant)
+
+        t'.ReplaceIf p is_constant
+        t'
+
+    member t.getTensorDescriptor (nchw : int*int*int*int) = 
+        ObjectPool.getFromDict tensorDescriptorPool nchw (fun _ -> new TensorDescriptor()) (fun (t: TensorDescriptor) x -> x |> t.SetTensor4dDescriptor)
+    member t.getFilterDescriptor (nchw : int*int*int*int) = 
+        ObjectPool.getFromDict filterDescriptorPool nchw (fun _ -> new FilterDescriptor()) (fun (t: FilterDescriptor) x -> x |> t.SetFilter4dDescriptor)
+    member t.getConvolutionDescriptor (convPars : ConvolutionParameters) = 
+        ObjectPool.getFromDict convolutionDescriptorPool convPars (fun _ -> new ConvolutionDescriptor()) (fun (t: ConvolutionDescriptor) x -> x |> t.SetConvolution2dDescriptor)
+    member t.getPoolingDescriptor (p : PoolingParameters) = 
+        ObjectPool.getFromDict poolingDescriptorPool p (fun _ -> new PoolingDescriptor()) (fun (t: PoolingDescriptor) x -> x |> t.SetPooling2dDescriptor)
+
+    /// Sets only the object pool pointers to zero.
+    member inline t.ResetPointers() =
+        d4Mp := 0
+        wp := 0
+
+    /// Zeroes out the adjoints in preparation for the backprop step and sets all the object pool pointers to zero.
+    member t.Reset () =
+        for i= !d4Mp-1 downto 0 do
+            let x : d4M = d4MPool.[i]
+            x.setZeroAdjoint()
+        t.ResetPointers()
+
+
+let ObjectPool = new ObjectPool() // In the past iteration of the library, the object pool's role was taken by the tape. Not anymore.
+
+type d4M with
+    /// Copies a matrix.
+    /// Uses the object pool.
+    member inline t.copy'() =
+        match t.A with
+        | Some A -> 
+            t.nchw 
+            |> ObjectPool.getd4M false
+            |> fun c ->
+                c.P.AsyncCopyToDevice(t.P,str)
+                A.AsyncCopyToDevice(A,str)
+                c
+        | None -> 
+            t.nchw 
+            |> ObjectPool.getd4M true
+            |> fun c ->
+                c.P.AsyncCopyToDevice(t.P,str)
+                c
+
+
+
+let tape = new Stack<_>(1000) // Nice and simple way of passing in the closures for the backprop step.
+
 let inline divup a b = (a-1)/b+1 // Integer division with rounding up. (a+b-1)/b is another variant on this.
 
 let kernels_dir = IO.Path.Combine(__SOURCE_DIRECTORY__,"Cuda Kernels")
@@ -409,6 +414,9 @@ let load_kernel kernel_code kernel_name =
         let ptx = k.GetPTX()
         IO.File.WriteAllBytes(kernel_path,ptx)
         ctx.LoadKernelPTX(ptx,kernel_name)
+
+// DeviceTransformModules could be all potentially made generic, but I do not want to take the risk without the type system helping me.
+// I would need something like a type provider for Alea modules. I am curious as to how v3 of Alea will turn out.
 
 /// o <- f(x)
 type DeviceUnaryTransformModule(op: string, unique_name : string) = 
@@ -931,7 +939,7 @@ let saxpy (alpha:float32) (x_nchw, x:CudaDeviceVariable<float32>) (y_nchw, y:Cud
 /// General matrix-matrix addition. Inplace version.
 /// The function is not indented for transposes due to dimensional confusion.
 #nowarn "49"
-let private geam transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_rows, A_num_cols as A_nchw), A:CudaDeviceVariable<float32>) beta ((B_num_images, B_num_channels, B_num_rows, B_num_cols as B_nchw), B:CudaDeviceVariable<float32>) ((C_num_images, C_num_channels, C_num_rows, C_num_cols as C_nchw), C:CudaDeviceVariable<float32>) =
+let geam transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_rows, A_num_cols as A_nchw), A:CudaDeviceVariable<float32>) beta ((B_num_images, B_num_channels, B_num_rows, B_num_cols as B_nchw), B:CudaDeviceVariable<float32>) ((C_num_images, C_num_channels, C_num_rows, C_num_cols as C_nchw), C:CudaDeviceVariable<float32>) =
     let inline geam (A_num_rows, A_num_cols) (B_num_rows, B_num_cols) (C_num_rows, C_num_cols) =
         let a_row = if transa = nT then A_num_rows else A_num_cols
         let a_col = if transa = nT then A_num_cols else A_num_rows
@@ -954,7 +962,7 @@ let private geam transa transb (alpha: float32) ((A_num_images, A_num_channels, 
 
 /// General matrix-matrix multiply from cuBLAS. Inplace version
 /// c,h,w get multiplied together to form the first dimension. n is the second dimension.
-let inline gemm transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_rows, A_num_cols), A:CudaDeviceVariable<float32>) ((B_num_images, B_num_channels, B_num_rows, B_num_cols), B:CudaDeviceVariable<float32>) beta ((C_num_images, C_num_channels, C_num_rows, C_num_cols), C:CudaDeviceVariable<float32>) =
+let gemm transa transb (alpha: float32) ((A_num_images, A_num_channels, A_num_rows, A_num_cols), A:CudaDeviceVariable<float32>) ((B_num_images, B_num_channels, B_num_rows, B_num_cols), B:CudaDeviceVariable<float32>) beta ((C_num_images, C_num_channels, C_num_rows, C_num_cols), C:CudaDeviceVariable<float32>) =
     let inline gemm (A_num_rows, A_num_cols) (B_num_rows, B_num_cols) (C_num_rows, C_num_cols) =
         let a_col = if transa = nT then A_num_cols else A_num_rows
         let b_row = if transb = nT then B_num_rows else B_num_cols
@@ -1001,10 +1009,8 @@ let matmult (a: d4M) (b:d4M) = matmult' None (a, b) |> fun x -> x.Value
 /// The output dimensions are based on the left argument.
 /// Those dimenions the size of 1 of the right argument are broadcasted.
 let inline private tensor_add' add_to_left alpha (left : d4M) beta (right : d4M) =
-    let leftDesc = ObjectPool.getTensorDescriptor
-    left.nchw |> leftDesc.SetTensor4dDescriptor
-    let rightDesc = ObjectPool.getTensorDescriptor
-    right.nchw |> rightDesc.SetTensor4dDescriptor
+    let leftDesc = ObjectPool.getTensorDescriptor left.nchw
+    let rightDesc = ObjectPool.getTensorDescriptor right.nchw
 
     let output = 
         if add_to_left = false 
@@ -1043,8 +1049,7 @@ let linear_layer_matmult (mm: (d4M*d4M) []) (bias: d4M option) =
 /// The activation function. Zeroes out the target primal during the call.
 let activation_forward mode (input : d4M)  =
     let input_sizes = input.nchw
-    let srcTensorDesc = ObjectPool.getTensorDescriptor
-    input_sizes |> srcTensorDesc.SetTensor4dDescriptor
+    let srcTensorDesc = ObjectPool.getTensorDescriptor input_sizes
 
     let alpha = 1.0f
     let beta = 1.0f
@@ -1062,12 +1067,9 @@ let activation_forward mode (input : d4M)  =
 
 /// The pooling function. Zeroes out the target primal during the call.
 let pooling_forward p (input : d4M) =
-    let poolingDescriptor = ObjectPool.getPoolingDescriptor
-    poolingDescriptor.SetPooling2dDescriptor p
-
-    let srcTensorDesc = ObjectPool.getTensorDescriptor
+    let poolingDescriptor = ObjectPool.getPoolingDescriptor p
     let input_sizes = input.nchw
-    input_sizes |> srcTensorDesc.SetTensor4dDescriptor
+    let srcTensorDesc = ObjectPool.getTensorDescriptor input_sizes
     //let dest_sizes = poolingDescriptor.GetPooling2dForwardOutputDim srcTensorDesc // Buggy cuDNN function.
     let dest_sizes =
         input_sizes
@@ -1078,8 +1080,7 @@ let pooling_forward p (input : d4M) =
 
     let output = ObjectPool.getd4M false dest_sizes
 
-    let dstTensorDesc = ObjectPool.getTensorDescriptor
-    dest_sizes |> dstTensorDesc.SetTensor4dDescriptor
+    let dstTensorDesc = ObjectPool.getTensorDescriptor dest_sizes
 
     let alpha, beta = 1.0f, 1.0f
 
@@ -1096,14 +1097,10 @@ let inline private convolutional_forward' (prev_output: ((int*int*int*int)*d4M) 
     let data_sizes = data.nchw
     let filter_sizes = filter.nchw
 
-    let srcTensorDesc = ObjectPool.getTensorDescriptor
-    let dstTensorDesc = ObjectPool.getTensorDescriptor
-    let filterDesc = ObjectPool.getFilterDescriptor
-    let convDesc = ObjectPool.getConvolutionDescriptor
-
-    data_sizes |> srcTensorDesc.SetTensor4dDescriptor
-    filter_sizes |> filterDesc.SetFilter4dDescriptor
-    convPar |> convDesc.SetConvolution2dDescriptor 
+    let srcTensorDesc = ObjectPool.getTensorDescriptor data_sizes
+    
+    let filterDesc = ObjectPool.getFilterDescriptor filter_sizes
+    let convDesc = ObjectPool.getConvolutionDescriptor convPar
 
     let dims, output = 
         let dims = convDesc.GetConvolution2dForwardOutputDim(srcTensorDesc,filterDesc)
@@ -1114,7 +1111,7 @@ let inline private convolutional_forward' (prev_output: ((int*int*int*int)*d4M) 
         | None ->
             dims, dims |> ObjectPool.getd4M false
 
-    dims |> dstTensorDesc.SetTensor4dDescriptor
+    let dstTensorDesc = ObjectPool.getTensorDescriptor dims
 
     let algo = cudnn.GetConvolutionForwardAlgorithm(srcTensorDesc,filterDesc,convDesc,dstTensorDesc,cudnnConvolutionFwdPreference.PreferFastest,SizeT 0)
     let workspace = 
@@ -1241,8 +1238,22 @@ let scalar_matrix_add scalar coef (a:d4M) =
     scalarMatrixAddModule.Value.A(scalar,a.P',coef,a.P',c.P')
 
     if a.A.IsSome then
-        let scalar_matrix_add_backward () = geam nT nT coef c.A' 1.0f a.A' a.A'
+        let scalar_matrix_add_backward () = saxpy coef c.A' a.A'
         tape.Push scalar_matrix_add_backward
+    c
+
+
+let add alpha (a: d4M) beta (b: d4M) =
+    let c = ObjectPool.getd4M false a.nchw
+
+    geam nT nT alpha a.P' beta b.P' c.P'
+
+    if a.A.IsSome then
+        let add_backward_left () = saxpy alpha c.A' a.A'
+        tape.Push add_backward_left
+    if b.A.IsSome then
+        let add_backward_right () =  saxpy beta c.A' b.A'
+        tape.Push add_backward_right
     c
 
 let clipModule = lazy new DeviceTrinaryCoefTransformModule("((x < coef_x) ? coef_x : (x > coef_y ? coef_y : x))+coef_z;","Clip")
@@ -1267,7 +1278,7 @@ let inline tanh_ x = activation_forward cudnnActivationMode.Tanh x
 let inline clipped_sigmoid x = clip 0.0001f 0.9999f (sigmoid x) 0.0f
 
 let squared_error_cost target activations =
-    tensor_add 1.0f target -1.0f activations // TODO: tensor_add is ungodly slow in v3.
+    add 1.0f target -1.0f activations // TODO: tensor_add is ungodly slow in v3. Make v4 wrapper.
     |> square
     |> sum
     |> scale (0.5f/ float32 target.num_images)

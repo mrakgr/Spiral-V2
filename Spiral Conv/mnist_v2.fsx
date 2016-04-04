@@ -62,7 +62,7 @@ let training_loop label data = // For now, this is just checking if the new libr
 let learning_rate = 0.05f
 
 let test() =
-    for i=1 to 50 do
+    for i=1 to 5 do
         let mutable er = 0.0f
         for j=0 to train_images.Length-1 do
             let _,r = training_loop train_labels.[j] train_images.[j] // Forward step

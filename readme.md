@@ -11,3 +11,5 @@ UPDATE OF UPDATE 4/3/2016: No, I am pretty close to the finish line in the terms
 Just as it is noted in the Julia documentation, TensorAdd is roughly 30 times slower than it ought to be, in fact it runs worse than the matrix multiply.
 
 Tomorrow I'll implement the descriptor sharing via the object pool and then start on the wrapper.
+
+UPDATE 4/4/2016: Redesigned the object pool. It also seems that TensorAdd works properly in the previous library. When I remove the biases, the new library is actually a bit faster than the old one. At any rate, I now have everything I need to squeeze down the value function for the [N puzzle](https://github.com/mrakgr/N-Puzzle-Experiments), but let me deal with the v4 wrapper as per plan.

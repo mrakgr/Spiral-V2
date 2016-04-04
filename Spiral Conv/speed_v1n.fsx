@@ -6,6 +6,10 @@
 
 // Even when I pull the setTensor calls outside the function it is still too slow by about 13 times.
 
+// Edit: Actually the reason it got 2x faster if because by accident I removed an add_tensor operation.
+// So it really is 30x slower than it should be. Also sharing tensor decriptors helps performance a 
+// tiny bit, but increases code clarity significantly.
+
 open System
 open System.IO
 
@@ -60,20 +64,18 @@ let add_to_left = false
 let alpha = 1.0f
 let beta = -1.0f
 
-let leftDesc = ObjectPool.getTensorDescriptor
-left.nchw |> leftDesc.SetTensor4dDescriptor
-let rightDesc = ObjectPool.getTensorDescriptor
-right.nchw |> rightDesc.SetTensor4dDescriptor
-
-let output = 
-    if add_to_left = false 
-    then 
-        left.nchw |> ObjectPool.getd4M false 
-        |> fun output -> cudnn.AddTensor(alpha,leftDesc,left.P,0.0f,leftDesc,output.P); output // Copy the left to output
-    else 
-        left
-
 let inline training_loop data = // For now, this is just checking if the new library can overfit on a single minibatch.
+    let leftDesc = ObjectPool.getTensorDescriptor left.nchw
+    let rightDesc = ObjectPool.getTensorDescriptor right.nchw
+
+    let output = 
+        if add_to_left = false 
+        then 
+            left.nchw |> ObjectPool.getd4M false 
+            |> fun output -> cudnn.AddTensor(alpha,leftDesc,left.P,0.0f,leftDesc,output.P); output // Copy the left to output
+        else 
+            left
+
     cudnn.AddTensor(beta,rightDesc,right.P,1.0f,leftDesc,output.P) // Add right to output.
     
     //data |> squared_error_cost (train_images.[1]) |> ignore
