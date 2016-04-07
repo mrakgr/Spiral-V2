@@ -1,15 +1,17 @@
-﻿// Basic reverse mode AD on the GPU. This v2 of Spiral is focused on convolutional operations.
+﻿// There is something wrong with the v4 wrapper and I keep getting internal errors. Let me do Spiral piece by piece again.
+
+// Basic reverse mode AD on the GPU. This v2 of Spiral is focused on convolutional operations.
 
 module SpiralV2
 
 #if INTERACTIVE
-#r "../packages/ManagedCuda-75-x64.7.5.7/lib/net45/x64/ManagedCuda.dll"
-#r "../packages/ManagedCuda-75-x64.7.5.7/lib/net45/x64/NVRTC.dll"
-#r "../packages/ManagedCuda-75-x64.7.5.7/lib/net45/x64/CudaBlas.dll"
-#r "../packages/ManagedCuda-75-x64.7.5.7/lib/net45/x64/CudaRand.dll"
-#r "../packages/ManagedCuda-75-x64.7.5.7/lib/net45/x64/NPP.dll"
-//#r "../packages/ManagedCuda-CudaDNN.3.0/lib/net45/CudaDNN.dll"
 #r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\CudaDNNv4\bin\Release\CudaDNNv4.dll"
+#r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\CudaDNNv4\bin\Release\ManagedCuda.dll"
+#r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\CudaBlas\bin\x64\Release\CudaBlas.dll"
+#r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\NVRTC\bin\x64\Release\NVRTC.dll"
+#r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\CudaRand\bin\x64\Release\CudaRand.dll"
+#r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\NPP\bin\x64\Release\NPP.dll"
+#r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\ManagedCUDA\bin\Release\ManagedCuda.dll"
 #endif
 
 // Open up the namespaces.
@@ -19,7 +21,7 @@ open ManagedCuda.VectorTypes
 open ManagedCuda.CudaBlas
 open ManagedCuda.CudaRand
 open ManagedCuda.NVRTC
-open ManagedCuda.CudaDNN
+open ManagedCuda.CudaDNNv4
 
 open System
 open System.Collections.Generic
@@ -33,7 +35,7 @@ let numSm = ctx.GetDeviceInfo().MultiProcessorCount // The number of streaming m
 let str = new CudaStream()
 // Set the Cuda libraries handles to the above stream.
 let cublas = CudaBlas(str.Stream,PointerMode.Host,AtomicsMode.Allowed) // Better performance for some solver functions with atomics allowed. The Spiral library does not use them though.
-let cudnn = new CudaDNN.CudaDNNContext()
+let cudnn = new CudaDNNContext()
 cudnn.SetStream(str)
 let cudaRandom = new CudaRand.CudaRandDevice(GeneratorType.PseudoDefault)
 cudaRandom.SetStream(str.Stream)
@@ -147,6 +149,7 @@ type d4M =
     member inline t.setPrimal (x: float32) = 
         let v = BitConverter.ToUInt32(BitConverter.GetBytes(x),0)
         t.P.MemsetAsync(v,str.Stream)
+
     /// Creates a copy of this matrix with all the values set to zero.
     member inline t.zeroLike() =
         match t.A with
@@ -307,6 +310,7 @@ type ObjectPool() =
     let convolutionDescriptorPool = Dictionary(HashIdentity.Structural)
     let poolingDescriptorPool = Dictionary(HashIdentity.Structural)
     let activationDescriptorPool = Dictionary(HashIdentity.Structural)
+    let BNDescriptorPool = Dictionary(HashIdentity.Structural)
 
     static member inline private getFromPool (pool : ResizeArray<_>) (pointer_to_pool : int ref) (creation_function) =
         if pool.Count > !pointer_to_pool then
@@ -357,6 +361,10 @@ type ObjectPool() =
         ObjectPool.getFromDict poolingDescriptorPool p (fun _ -> new PoolingDescriptor()) (fun (t: PoolingDescriptor) x -> x |> t.SetPooling2dDescriptor)
     member t.getActivationDescriptor (mode : cudnnActivationMode, nanopt : cudnnNanPropagation, reluCeiling as p) = 
         ObjectPool.getFromDict activationDescriptorPool p (fun _ -> new ActivationDescriptor()) (fun (t: ActivationDescriptor) x -> x |> t.SetActivationDescriptor)
+    member t.getBNDescriptor (((nchw : int*int*int*int), (mode : cudnnBatchNormMode), srcDesc : TensorDescriptor) as p) = 
+        ObjectPool.getFromDict BNDescriptorPool p 
+            (fun _ -> new TensorDescriptor()) 
+            (fun (t: TensorDescriptor) (nchw, mode, srcDesc) -> cudnn.DeriveBNTensorDescriptor(t,srcDesc,mode))
 
     /// Sets only the object pool pointers to zero.
     member inline t.ResetPointers() =
@@ -385,6 +393,7 @@ type d4M with
                 c.P.AsyncCopyToDevice(t.P,str)
                 A.AsyncCopyToDevice(A,str)
                 c
+
         | None -> 
             t.nchw 
             |> ObjectPool.getd4M true
@@ -394,7 +403,7 @@ type d4M with
 
 
 
-let tape = new Stack<_>(1000) // Nice and simple way of passing in the closures for the backprop step.
+let tape = new Stack<(unit -> unit)>(1000) // Nice and simple way of passing in the closures for the backprop step.
 
 let inline divup a b = (a-1)/b+1 // Integer division with rounding up. (a+b-1)/b is another variant on this.
 
@@ -1124,7 +1133,7 @@ let inline private convolutional_forward' (prev_output: ((int*int*int*int)*d4M) 
         |> ObjectPool.getWorkspace
 
     let alpha = 1.0f
-    let beta = 1.0f
+    let beta = 1.0f // This thing could be dangerous.
 
     match prev_output with
     | None -> cudnn.ConvolutionForward(alpha,srcTensorDesc,data.P,filterDesc,filter.P,convDesc,algo,workspace,0.0f,dstTensorDesc,output.P)
@@ -1155,6 +1164,45 @@ let convolution_forward convPar (data : d4M) (filter : d4M) =
     convolutional_forward' None (convPar,data,filter)
     |> fun x -> x.Value |> snd
 
+let batch_normalization_forward bnMode (bnScale : d4M) (bnBias : d4M) (bnRunningMean : d4M) (bnRunningVariance : d4M) exponentialAverageFactor do_inference (input : d4M) =
+    let input_sizes = input.nchw
+    let bias_sizes = bnBias.nchw
+    let srcTensorDesc = ObjectPool.getTensorDescriptor input_sizes
+
+    let bnDesc = 
+        //bnBias.nchw |> ObjectPool.getTensorDescriptor
+        ObjectPool.getBNDescriptor (input_sizes, bnMode, srcTensorDesc)
+
+    let _ =
+        let mutable d,n,c,h,w,sn,sc,sh,sw = cudnnDataType.Double,0,0,0,0,0,0,0,0
+        bnDesc.GetTensor4dDescriptor(&d,&n,&c,&h,&w,&sn,&sc,&sh,&sw)
+        let bn_nchw = n,c,h,w
+        if bn_nchw <> bnScale.nchw then failwith "Tensor dimensions for bnScale are incorrect."
+        if bn_nchw <> bnBias.nchw then failwith "Tensor dimensions for bnBias are incorrect."
+        if bn_nchw <> bnRunningMean.nchw then failwith "Tensor dimensions for bnRunningMean are incorrect."
+        if bn_nchw <> bnRunningVariance.nchw then failwith "Tensor dimensions for bnRunningVariance are incorrect."
+
+    let alpha, beta = 1.0f, 0.0f
+    let epsilon = 1e-5
+    let bnSavedMean = bias_sizes |> ObjectPool.getd4M true
+    let bnSavedVariance = bias_sizes |> ObjectPool.getd4M true
+    let output = input_sizes |> ObjectPool.getd4M false
+
+    if do_inference = false then
+        cudnn.BatchNormalizationForwardTraining(bnMode,alpha,beta,srcTensorDesc,input.P,srcTensorDesc,output.P,bnDesc,bnScale.P,bnBias.P,exponentialAverageFactor,bnRunningMean.P,bnRunningVariance.P,epsilon,bnSavedMean.P,bnSavedVariance.P)
+        if input.A.IsSome then 
+            let batch_normalization_backward () =
+                let dx_alpha, dx_beta = 1.0f, 1.0f
+                let param_alpha, param_beta = 1.0f, 1.0f
+
+                cudnn.BatchNormalizationBackward(bnMode,dx_alpha,dx_beta,param_alpha,param_beta,srcTensorDesc,input.P,srcTensorDesc,output.A.Value,srcTensorDesc,input.A.Value,bnDesc,bnScale.P,bnScale.A.Value,bnBias.A.Value,epsilon,bnSavedMean.P,bnSavedVariance.P)
+                
+            tape.Push batch_normalization_backward
+    else
+        cudnn.BatchNormalizationForwardInference(bnMode,alpha,beta,srcTensorDesc,input.P,srcTensorDesc,output.P,bnDesc,bnScale.P,bnBias.P,bnRunningMean.P,bnRunningVariance.P, epsilon)
+        
+    output
+    
 let linear_layer_conv (convs: (ConvolutionParameters*d4M*d4M) []) (bias: d4M option) =
     convs
     |> Array.fold convolutional_forward' None
@@ -1199,6 +1247,9 @@ let square (a:d4M) =
         let square_backward () = squareErrorModule.Value.A(a.P',c.A',a.A',a.A')
         tape.Push square_backward
     c
+
+/// This one is for debugging currently
+let squareSumModule = lazy new DeviceUnaryMapSumModule("x*x;", "SquareSum")
 
 let sumModule = lazy new DeviceUnaryMapSumModule("x;", "Sum")
 let sumErrorModule = lazy new DeviceUnaryCoefTransformModule("coef_x + x;", "SumError")
@@ -1319,8 +1370,8 @@ type ConvolutionalFeedforwardLayer =
     {
     W : d4M  // Input weight matrix
     b : d4M  // Bias vector
-    a : d4M -> d4M
-    } with     // Activation function
+    a : d4M -> d4M // Activation function
+    }      
      
     static member fromArray (a : d4M[]) act =
         {
@@ -1377,6 +1428,53 @@ type FeedforwardLayer =
     member t.ResetAdjoints () = t.W.setZeroAdjoint(); t.b.setZeroAdjoint()
     member t.SGD learning_rate = saxpy -learning_rate t.W.A' t.W.P'; saxpy -learning_rate t.b.A' t.b.P'
 
+/// The initialization parameter for this is based off the weights and not the constructor.
+/// Can be used for feedforward nets assuming the last two dimensions are 1. Uses the spatial normalization mode.
+type BNConvolutionalLayer =
+    {
+    W : d4M  // Input weight tensor
+    bnScale : d4M  // Scale tensor
+    bnBias : d4M  // Bias tensor
+    bnRunningMean : d4M  // Mean tensor
+    bnRunningVariance : d4M  // Variance tensor
+    a : d4M -> d4M // Activation function
+    }      
+
+    static member create weight_nchw a =
+        let W = d4M.makeUniformRandomNode weight_nchw
+        let bias_sizes = weight_nchw |> fun (n,c,h,w) -> (1,n,1,1)
+
+        let bnScale = bias_sizes |> d4M.create 
+        bnScale.setPrimal 0.1f // Initial scale value based on the Recurrent Batch Normalization paper by Cooijmans et al.
+        bnScale.setZeroAdjoint()
+        let bnBias = bias_sizes |> d4M.create
+        bnBias.setZeroPrimal()
+        bnBias.setZeroAdjoint()
+        let bnRunningMean = bias_sizes |> d4M.createConstant
+        let bnRunningVariance = bias_sizes |> d4M.createConstant
+
+        { W = W; bnScale = bnScale; bnBias = bnBias; bnRunningMean = bnRunningMean; bnRunningVariance = bnRunningVariance; a=a  }
+
+    member t.train (convPars,input:d4M) exponentialAverageFactor = 
+        let bnMode = cudnnBatchNormMode.BatchNormSpatial
+        convolution_forward convPars input t.W
+        |> batch_normalization_forward bnMode t.bnScale t.bnBias t.bnRunningMean t.bnRunningVariance exponentialAverageFactor false
+        |> t.a
+    member t.inference (convPars,input:d4M) = 
+        let bnMode = cudnnBatchNormMode.BatchNormSpatial
+        convolution_forward convPars input t.W
+        |> batch_normalization_forward bnMode t.bnScale t.bnBias t.bnRunningMean t.bnRunningVariance 1.0 true
+        |> t.a
+
+    member l.ToArray = [|l.W;l.bnScale;l.bnBias;l.bnRunningMean;l.bnRunningVariance|]
+    member l.ResetAdjoints () = 
+        l.W.setZeroAdjoint();l.bnScale.setZeroAdjoint();
+        l.bnBias.setZeroAdjoint()
+    member t.SGD learning_rate = 
+        saxpy -learning_rate t.W.A' t.W.P'
+        saxpy -learning_rate t.bnScale.A' t.bnScale.P'
+        saxpy -learning_rate t.bnBias.A' t.bnBias.P'
+
 
 let load_data file_name is_constant =
     use stream_data = IO.File.OpenRead(file_name)
@@ -1397,3 +1495,4 @@ let load_data file_name is_constant =
         |]
 
     weights
+

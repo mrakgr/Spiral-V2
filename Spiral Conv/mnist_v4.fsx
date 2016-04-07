@@ -1,10 +1,8 @@
-﻿// No, the convolutional functions are not right. The original feedforward example is so much better that it is not even funny.
-
-open System
+﻿open System
 open System.IO
 
 #if INTERACTIVE
-#load "spiral_conv.fsx"
+#load "spiral_conv_v2.fsx"
 #endif
 open SpiralV2
 

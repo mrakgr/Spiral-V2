@@ -14,7 +14,7 @@ open System
 open System.IO
 
 #if INTERACTIVE
-#load "spiral_conv.fsx"
+#load "spiral_conv_v2.fsx"
 #endif
 open SpiralV2
 
@@ -64,9 +64,12 @@ let add_to_left = false
 let alpha = 1.0f
 let beta = -1.0f
 
+//let sw (n,c,h,w) = (w,h,c,n)
+let sw (n,c,h,w) = (c,h,w,n)
+
 let inline training_loop data = // For now, this is just checking if the new library can overfit on a single minibatch.
-    let leftDesc = ObjectPool.getTensorDescriptor left.nchw
-    let rightDesc = ObjectPool.getTensorDescriptor right.nchw
+    let leftDesc = ObjectPool.getTensorDescriptor (left.nchw |> sw)
+    let rightDesc = ObjectPool.getTensorDescriptor (right.nchw |> sw)
 
     let output = 
         if add_to_left = false 

@@ -58,10 +58,11 @@
     <None Include="App.config" />
     <Content Include="packages.config" />
     <None Include="spiral.fsx" />
-    <None Include="spiral_conv.fsx" />
     <None Include="mnist_v0.fsx" />
     <None Include="mnist_v2-.fsx" />
     <None Include="mnist_v1-.fsx" />
+    <None Include="batch_normalization_example_v2-.fsx" />
+    <None Include="batch_normalization_example_v3-.fsx" />
     <None Include="mnist_v1.fsx" />
     <None Include="mnist_v2.fsx" />
     <None Include="mnist_v3.fsx" />
@@ -73,6 +74,9 @@
     <None Include="speed_v2.fsx" />
     <None Include="speed_v2n.fsx" />
     <None Include="speed_v3n.fsx" />
+    <None Include="spiral_conv.fsx" />
+    <None Include="spiral_conv_v2.fsx" />
+    <None Include="batch_normalization_example.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="CudaBlas">

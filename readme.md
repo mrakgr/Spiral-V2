@@ -13,3 +13,7 @@ Just as it is noted in the Julia documentation, TensorAdd is roughly 30 times sl
 Tomorrow I'll implement the descriptor sharing via the object pool and then start on the wrapper.
 
 UPDATE 4/4/2016: Redesigned the object pool. It also seems that TensorAdd works properly in the previous library. When I remove the biases, the new library is actually a bit faster than the old one. At any rate, I now have everything I need to squeeze down the value function for the [N puzzle](https://github.com/mrakgr/N-Puzzle-Experiments), but let me deal with the v4 wrapper as per plan.
+
+UPDATE 4/7/2016: Done with the v4 wrapper and the convolutional [batch normalization](http://arxiv.org/abs/1502.03167) example. It is quite something, it was worth doing the v4 wrapper just for it. I am definitely not getting the full use of it on Mnist. Also as luck would have it, the v5 RC of cuDNN came out so I might as well do that as well while I am at it. I was not planning on doing recurrent nets right now, but they will come in handy. I'd rather have functions for linear layers which would allow me to combine recurrent nets with batch normalization. At least, the new Winograd convolutional kernels are a reason to move to v5 already.
+
+Also, a paper showing how to use [recurrent batch normalization](http://arxiv.org/abs/1603.09025) effectively came out very recently.

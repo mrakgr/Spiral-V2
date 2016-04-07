@@ -1,4 +1,4 @@
-﻿// I think I finally got all the bugs out. Let me try it. I expect I will be able to break 99% with this.
+﻿// Finally done. 99.52% is my record on Mnist currently. Batch normalization is quite something.
 
 open System
 open System.IO
@@ -7,6 +7,9 @@ open System.IO
 #load "spiral_conv_v2.fsx"
 #endif
 open SpiralV2
+
+open ManagedCuda
+open ManagedCuda.CudaDNNv4
 
 let minibatch_size = 128
 let load_mnist filename =
@@ -39,16 +42,18 @@ let [|test_images;test_labels;train_images;train_labels|] =
     [|"t10k-images.idx3-ubyte";"t10k-labels.idx1-ubyte";"train-images.idx3-ubyte";"train-labels.idx1-ubyte"|]
     |> Array.map (fun x -> Path.Combine(__SOURCE_DIRECTORY__,x) |> load_mnist)
 
-
-let l1 = ConvolutionalFeedforwardLayer.createRandomLayer (128,1,5,5) relu
-let l2 = ConvolutionalFeedforwardLayer.createRandomLayer (128,128,5,5) relu
-let l3 = ConvolutionalFeedforwardLayer.createRandomLayer (128,128,5,5) relu
-let l4 = ConvolutionalFeedforwardLayer.createRandomLayer (128,128,5,5) relu
-let l5 = ConvolutionalFeedforwardLayer.createRandomLayer (10,128,4,4) clipped_sigmoid
+let l1 = BNConvolutionalLayer.create (128,1,5,5) relu
+let l2 = BNConvolutionalLayer.create (128,128,5,5) relu
+let l3 = BNConvolutionalLayer.create (128,128,5,5) relu
+let l4 = BNConvolutionalLayer.create (128,128,5,5) relu
+let l5 = BNConvolutionalLayer.create (10,128,4,4) clipped_sigmoid
 
 let base_nodes = [|l1;l2;l3;l4;l5|]
 
-let training_loop label data = // For now, this is just checking if the new library can overfit on a single minibatch.
+let training_loop label data i = // For now, this is just checking if the new library can overfit on a single minibatch.
+    let i' = !i
+    i := i'+1
+    let factor = 1.0/(1.0 + float i')
     [|
     defaultConvPar,l1
     defaultConvPar,l2
@@ -56,16 +61,28 @@ let training_loop label data = // For now, this is just checking if the new libr
     defaultConvPar,l4
     defaultConvPar,l5
     |] 
-    |> Array.fold (fun x (convPars,layer) -> layer.runLayer (convPars,x)) data
+    |> Array.fold (fun x (convPars,layer) -> layer.train (convPars,x) factor) data
     |> fun x -> lazy get_accuracy label x, cross_entropy_cost label x
 
-let learning_rate = 0.5f
+let inference_loop label data = // For now, this is just checking if the new library can overfit on a single minibatch.
+    [|
+    defaultConvPar,l1
+    defaultConvPar,l2
+    {defaultConvPar with stride_h=2; stride_w=2},l3
+    defaultConvPar,l4
+    defaultConvPar,l5
+    |] 
+    |> Array.fold (fun x (convPars,layer) -> layer.inference (convPars,x) ) data
+    |> fun x -> lazy get_accuracy label x, cross_entropy_cost label x
+
+let learning_rate = 1.5f
 
 let test() =
-    for i=1 to 5 do
+    let c = ref 0
+    for i=1 to 10 do
         let mutable er = 0.0f
         for j=0 to train_images.Length-1 do
-            let _,r = training_loop train_labels.[j] train_images.[j] // Forward step
+            let _,r = training_loop train_labels.[j] train_images.[j] c // Forward step
             er <- er + !r.P
             ObjectPool.Reset() // Resets all the adjoints from the top of the pointer in the object pool along with the pointers.
             base_nodes |> Array.iter (fun x -> x.ResetAdjoints())
@@ -81,7 +98,7 @@ let test() =
 
         let mutable acc = 0.0f
         for j=0 to test_images.Length-1 do
-            let acc',r = training_loop test_labels.[j] test_images.[j] // Forward step
+            let acc',r = inference_loop test_labels.[j] test_images.[j] // Forward step
             ObjectPool.ResetPointers()
             tape.Clear()
             acc <- acc'.Value + acc
@@ -90,3 +107,5 @@ let test() =
         printfn "-----"
 
 test()
+
+ctx.GetFreeDeviceMemorySize()
