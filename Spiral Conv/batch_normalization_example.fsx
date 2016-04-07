@@ -79,7 +79,7 @@ let learning_rate = 1.5f
 
 let test() =
     let c = ref 0
-    for i=1 to 10 do
+    for i=1 to 1 do
         let mutable er = 0.0f
         for j=0 to train_images.Length-1 do
             let _,r = training_loop train_labels.[j] train_images.[j] c // Forward step
@@ -109,3 +109,4 @@ let test() =
 test()
 
 ctx.GetFreeDeviceMemorySize()
+

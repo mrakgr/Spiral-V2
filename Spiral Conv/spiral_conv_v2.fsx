@@ -305,6 +305,8 @@ type ObjectPool() =
     let d4Mp = ref 0
     let workspacePool = ResizeArray()
     let wp = ref 0
+    let mutable big_worspace = CudaDeviceVariable.Null
+
     let tensorDescriptorPool = Dictionary(HashIdentity.Structural)
     let filterDescriptorPool = Dictionary(HashIdentity.Structural)
     let convolutionDescriptorPool = Dictionary(HashIdentity.Structural)
@@ -333,14 +335,26 @@ type ObjectPool() =
             t
 
     member t.getWorkspace n = 
-        if n > 0 then
-            let t' = ObjectPool.getFromPool workspacePool wp (fun _ -> new_dev<byte> n)
+        let BIG_WORKSPACE_LIMIT = 100000
+
+        if n > 0 && n <= BIG_WORKSPACE_LIMIT then
+            let t' = ObjectPool.getFromPool workspacePool wp (fun _ -> printfn "initializing small workspace with n=%i" n; new_dev<byte> n)
             if int t'.Size < n then // Resize the object if less than n
+                printfn "resizing small workspace of %i to %i" (int t'.Size) n;
                 t'.Dispose()
                 let t'' = new_dev<byte> n
                 workspacePool.[!wp-1] <- t''
                 t''
             else t'
+        elif n > BIG_WORKSPACE_LIMIT then 
+        // For convolutional nets, the workspaces can get ridiculous, so I need to reuse them. 
+        // Having them in the object pool crashed my PC several times already.
+            if int big_worspace.Size < n then // Resize the object if less than n
+                printfn "resizing big workspace of %i to %i" (int big_worspace.Size) n;
+                big_worspace.Dispose()
+                big_worspace <- new_dev<byte> n
+                big_worspace
+            else big_worspace
         else CudaDeviceVariable.Null
     member t.getd4M is_constant (n:int,c:int,h:int,w:int as p) =
         let t' = 
