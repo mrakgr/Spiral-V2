@@ -77,6 +77,8 @@
     <None Include="spiral_conv.fsx" />
     <None Include="spiral_conv_v2.fsx" />
     <None Include="batch_normalization_example.fsx" />
+    <None Include="spiral_conv_v3.fsx" />
+    <None Include="batch_normalization_example_v2.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="CudaBlas">

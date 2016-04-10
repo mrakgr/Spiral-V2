@@ -1,9 +1,9 @@
-﻿// Basic reverse mode AD on the GPU. This v2 of Spiral is focused on convolutional operations. Uses cuDNN v4.
+﻿// Basic reverse mode AD on the GPU. This v2 of Spiral is focused on convolutional operations. Uses the cuDNN v5 RC.
 
 module SpiralV2
 
 #if INTERACTIVE
-#r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\CudaDNNv4\bin\Release\CudaDNNv4.dll"
+#r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\CudaDNNv5\bin\Release\CudaDNNv5.dll"
 #r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\CudaBlas\bin\x64\Release\CudaBlas.dll"
 #r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\NVRTC\bin\x64\Release\NVRTC.dll"
 #r @"C:\Users\Marko\Documents\Visual Studio 2015\Projects\managedCuda\CudaRand\bin\x64\Release\CudaRand.dll"
@@ -18,7 +18,7 @@ open ManagedCuda.VectorTypes
 open ManagedCuda.CudaBlas
 open ManagedCuda.CudaRand
 open ManagedCuda.NVRTC
-open ManagedCuda.CudaDNNv4
+open ManagedCuda.CudaDNNv5
 
 open System
 open System.Collections.Generic
@@ -29,6 +29,8 @@ let ctx = new CudaContext()
 let numSm = ctx.GetDeviceInfo().MultiProcessorCount // The number of streaming multiprocessors on the device.
 
 // Make a stream class.
+// TODO: The backwards pass and some forward functions could benefit greatly from using multiple streams.
+// Especially the backwards pass. It would be something worth doing for V3. I'll leave the library as is for now.
 let str = new CudaStream()
 // Set the Cuda libraries handles to the above stream.
 let cublas = CudaBlas(str.Stream,PointerMode.Host,AtomicsMode.Allowed) // Better performance for some solver functions with atomics allowed. The Spiral library does not use them though.
@@ -272,7 +274,6 @@ type PoolingDescriptor with
     member inline t.SetPooling2dDescriptor (p : PoolingParameters) =
         t.SetPooling2dDescriptor(p.mode,defaultMaxPoolingNanOption,p.windowHeight,p.windowWidth,p.verticalPadding,p.horizontalPadding,p.verticalStride,p.horizontalStride)
 
-    /// WARNING: The GetPooling2dForwardOutputDim method returns incorrect results! There is a bug in the cuDNN v3 library!
     member inline t.GetPooling2dForwardOutputDim s =
         let mutable n,c,h,w = 0,0,0,0
         t.GetPooling2dForwardOutputDim(s,&n,&c,&h,&w)
@@ -291,7 +292,7 @@ let defaultConvPar =
 
 type ConvolutionDescriptor with
     member inline t.SetConvolution2dDescriptor (p : ConvolutionParameters) =
-        t.SetConvolution2dDescriptor(p.pad_h,p.pad_w,p.stride_h,p.stride_w,p.upscale_h,p.upscale_w,p.mode)
+        t.SetConvolution2dDescriptor(p.pad_h,p.pad_w,p.stride_h,p.stride_w,p.upscale_h,p.upscale_w,p.mode, defaultType)
     member inline t.GetConvolution2dForwardOutputDim (s,f) =
         let mutable n,c,h,w = 0,0,0,0
         t.GetConvolution2dForwardOutputDim(s,f,&n,&c,&h,&w)
@@ -1099,13 +1100,7 @@ let pooling_forward p (input : d4M) =
     let poolingDescriptor = ObjectPool.getPoolingDescriptor p
     let input_sizes = input.nchw
     let srcTensorDesc = ObjectPool.getTensorDescriptor input_sizes
-    //let dest_sizes = poolingDescriptor.GetPooling2dForwardOutputDim srcTensorDesc // Buggy cuDNN function.
-    let dest_sizes =
-        input_sizes
-        |> fun (n,c,h,w) ->
-            n,c,
-            1 + divup (h + 2*p.verticalPadding - p.windowHeight) p.verticalStride,
-            1 + divup (h + 2*p.horizontalPadding - p.windowWidth) p.horizontalStride
+    let dest_sizes = poolingDescriptor.GetPooling2dForwardOutputDim srcTensorDesc
 
     let output = ObjectPool.getd4M false dest_sizes
 
@@ -1375,7 +1370,7 @@ let get_accuracy (targets : d4M) (activations : d4M) =
 
 type d4M with
     static member makeUniformRandomNode (n,c,h,w as nchw) =
-        let scale = (1.0f / sqrt(add_nchw nchw |> float32))
+        let scale = (2.0f / sqrt(add_nchw nchw |> float32))
         let p = d4M.create(n,c,h,w)
         fillRandomUniformMatrix p.P' scale 0.0f
         p
@@ -1403,10 +1398,6 @@ type ConvolutionalFeedforwardLayer =
         } 
 
     member l.runLayer (convPars,x:d4M) =
-        //linear_layer_matmult [|l.W,x|] (Some l.b) // This is a nonconvolutional layer
-        //matmult l.W x
-//        convolution_forward convPar x l.W
-        //|> fun x -> tensor_add 1.0f x 1.0f l.b
         linear_layer_conv [|convPars,x,l.W|] (Some l.b)
         |> l.a
 
@@ -1414,14 +1405,24 @@ type ConvolutionalFeedforwardLayer =
     member t.ResetAdjoints () = t.W.setZeroAdjoint(); t.b.setZeroAdjoint()
     member t.SGD learning_rate = saxpy -learning_rate t.W.A' t.W.P'; saxpy -learning_rate t.b.A' t.b.P'
 
+
+type INNet =
+      abstract member ResetAdjoints : unit -> unit
+      abstract member SGD : learning_rate:float32 -> unit
+      abstract member ToArray : d4M []
+      abstract member inference : x:d4M -> d4M
+      abstract member runLayer : x:d4M -> d4M
+      abstract member train : x:d4M -> (unit -> float) -> d4M
+
 // A fully connected feedforward layer of neurons
+//type FullyConnectedLayer = FeedforwardLayer
 type FeedforwardLayer =
     {
     W : d4M  // Input weight matrix
     b : d4M  // Bias vector
     a : d4M -> d4M
     } with     // Activation function
-     
+
     static member fromArray (a : d4M[]) act =
         {
          W = a.[0]
@@ -1436,12 +1437,71 @@ type FeedforwardLayer =
          a = act
         } 
 
-    member l.runLayer (x:d4M) =
-        linear_layer_matmult [|l.W,x|] (Some l.b) |> l.a
+    static member inline create = FeedforwardLayer.createRandomLayer
 
-    member l.ToArray = [|l.W;l.b|]
-    member t.ResetAdjoints () = t.W.setZeroAdjoint(); t.b.setZeroAdjoint()
-    member t.SGD learning_rate = saxpy -learning_rate t.W.A' t.W.P'; saxpy -learning_rate t.b.A' t.b.P'
+    interface INNet with
+        member l.runLayer (x:d4M) =
+            linear_layer_matmult [|l.W,x|] (Some l.b) |> l.a
+
+        /// This second attribute is supposed to be the exponential factor from the BN layer, but it is not used here.
+        member l.train (x: d4M) _ = (l :> INNet).runLayer x
+
+        member l.inference (x: d4M) = (l :> INNet).runLayer x
+
+        member l.ToArray = [|l.W;l.b|]
+        member t.ResetAdjoints () = t.W.setZeroAdjoint(); t.b.setZeroAdjoint()
+        member t.SGD learning_rate = saxpy -learning_rate t.W.A' t.W.P'; saxpy -learning_rate t.b.A' t.b.P'
+
+type ResidualFeedforwardLayer =
+    {
+    W1 : d4M  // Input weight matrix
+    b1 : d4M  // Bias vector
+    a1 : d4M -> d4M
+    W2 : d4M  // Input weight matrix
+    b2 : d4M  // Bias vector
+    a2 : d4M -> d4M
+    } with     // Activation function
+     
+    static member fromArray (a : d4M[]) act1 act2 =
+        {
+         W1 = a.[0]
+         b1 = a.[1]
+         a1 = act1
+         W2 = a.[2]
+         b2 = a.[3]
+         a2 = act2
+        }
+
+    static member createRandomLayer (n,c,h,w as nchw) act1 act2 =
+        {
+         W1 = d4M.makeUniformRandomNode nchw
+         b1 = d4M.makeUniformRandomNode (1,c,1,1)
+         a1 = act1
+         W2 = d4M.makeUniformRandomNode nchw
+         b2 = d4M.makeUniformRandomNode (1,c,1,1)
+         a2 = act2
+        } 
+
+    static member inline create = ResidualFeedforwardLayer.createRandomLayer
+
+    interface INNet with
+
+        member l.runLayer (x:d4M) =
+            linear_layer_matmult [|l.W1,x|] (Some l.b1) |> l.a1
+            |> fun p -> linear_layer_matmult [|l.W2,p|] (Some l.b2)
+            |> fun p -> add 1.0f p 1.0f x |> l.a2
+        
+        /// This second attribute is supposed to be the exponential factor from the BN layer, but it is not used here.
+        member l.train (x: d4M) _ = (l :> INNet).runLayer x
+
+        member l.inference (x: d4M) = (l :> INNet).runLayer x
+
+        member l.ToArray = [|l.W1;l.b1;l.W2;l.b2|]
+        member t.ResetAdjoints () = t.W1.setZeroAdjoint(); t.b1.setZeroAdjoint(); t.W2.setZeroAdjoint(); t.b2.setZeroAdjoint()
+        member t.SGD learning_rate = 
+            saxpy -learning_rate t.W1.A' t.W1.P'; saxpy -learning_rate t.b1.A' t.b1.P'
+            saxpy -learning_rate t.W2.A' t.W2.P'; saxpy -learning_rate t.b2.A' t.b2.P'
+
 
 /// The initialization parameter for this is based off the weights and not the constructor.
 /// Can be used for feedforward nets assuming the last two dimensions are 1. Uses the spatial normalization mode.
@@ -1490,6 +1550,135 @@ type BNConvolutionalLayer =
         saxpy -learning_rate t.bnScale.A' t.bnScale.P'
         saxpy -learning_rate t.bnBias.A' t.bnBias.P'
 
+type BNFullyConnectedLayer =
+    {
+    W : d4M  // Input weight tensor
+    bnScale : d4M  // Scale tensor
+    bnBias : d4M  // Bias tensor
+    bnRunningMean : d4M  // Mean tensor
+    bnRunningVariance : d4M  // Variance tensor
+    a : d4M -> d4M // Activation function
+    }      
+
+    /// Creates a layer with random weights.
+    static member create weight_nchw a =
+        let W = d4M.makeUniformRandomNode weight_nchw
+        let bias_sizes = weight_nchw |> fun (n,c,h,w) -> (1,c,1,1)
+
+        let bnScale = bias_sizes |> d4M.create 
+        bnScale.setPrimal 0.1f // Initial scale value based on the Recurrent Batch Normalization paper by Cooijmans et al.
+        bnScale.setZeroAdjoint()
+        let bnBias = bias_sizes |> d4M.create
+        bnBias.setZeroPrimal()
+        bnBias.setZeroAdjoint()
+        let bnRunningMean = bias_sizes |> d4M.createConstant
+        let bnRunningVariance = bias_sizes |> d4M.createConstant
+
+        { W = W; bnScale = bnScale; bnBias = bnBias; bnRunningMean = bnRunningMean; bnRunningVariance = bnRunningVariance; a=a  }
+
+    interface INNet with
+        member t.train input exponentialAverageFactor = 
+            let bnMode = cudnnBatchNormMode.BatchNormSpatial
+            matmult t.W input
+            |> batch_normalization_forward bnMode t.bnScale t.bnBias t.bnRunningMean t.bnRunningVariance (exponentialAverageFactor()) false
+            |> t.a
+        member t.inference input = 
+            let bnMode = cudnnBatchNormMode.BatchNormSpatial
+            matmult t.W input
+            |> batch_normalization_forward bnMode t.bnScale t.bnBias t.bnRunningMean t.bnRunningVariance 1.0 true
+            |> t.a
+
+        member t.runLayer x = (t :> INNet).inference x
+
+        member l.ToArray = [|l.W;l.bnScale;l.bnBias;l.bnRunningMean;l.bnRunningVariance|]
+        member l.ResetAdjoints () = 
+            l.W.setZeroAdjoint();l.bnScale.setZeroAdjoint();
+            l.bnBias.setZeroAdjoint()
+        member t.SGD learning_rate = 
+            saxpy -learning_rate t.W.A' t.W.P'
+            saxpy -learning_rate t.bnScale.A' t.bnScale.P'
+            saxpy -learning_rate t.bnBias.A' t.bnBias.P'
+
+type BNResidualFullyConnectedLayer =
+    {
+    W1 : d4M  // Input weight tensor
+    bnScale1 : d4M  // Scale tensor
+    bnBias1 : d4M  // Bias tensor
+    bnRunningMean1 : d4M  // Mean tensor
+    bnRunningVariance1 : d4M  // Variance tensor
+    a1 : d4M -> d4M // Activation function
+
+    W2 : d4M  // Input weight tensor
+    bnScale2 : d4M  // Scale tensor
+    bnBias2 : d4M  // Bias tensor
+    bnRunningMean2 : d4M  // Mean tensor
+    bnRunningVariance2 : d4M  // Variance tensor
+    a2 : d4M -> d4M // Activation function
+    }      
+
+    /// Creates a layer with random weights.
+    static member create weight_nchw a1 a2 =
+        let bias_sizes = weight_nchw |> fun (n,c,h,w) -> (1,c,1,1)
+        
+        let W1 = d4M.makeUniformRandomNode weight_nchw
+        let bnScale1 = bias_sizes |> d4M.create 
+        bnScale1.setPrimal 0.1f // Initial scale value based on the Recurrent Batch Normalization paper by Cooijmans et al.
+        bnScale1.setZeroAdjoint()
+        let bnBias1 = bias_sizes |> d4M.create
+        bnBias1.setZeroPrimal()
+        bnBias1.setZeroAdjoint()
+        let bnRunningMean1 = bias_sizes |> d4M.createConstant
+        let bnRunningVariance1 = bias_sizes |> d4M.createConstant
+
+        let W2 = d4M.makeUniformRandomNode weight_nchw
+        let bnScale2 = bias_sizes |> d4M.create 
+        bnScale2.setPrimal 0.1f // Initial scale value based on the Recurrent Batch Normalization paper by Cooijmans et al.
+        bnScale2.setZeroAdjoint()
+        let bnBias2 = bias_sizes |> d4M.create
+        bnBias2.setZeroPrimal()
+        bnBias2.setZeroAdjoint()
+        let bnRunningMean2 = bias_sizes |> d4M.createConstant
+        let bnRunningVariance2 = bias_sizes |> d4M.createConstant
+
+        { W1 = W1; bnScale1 = bnScale1; bnBias1 = bnBias1; bnRunningMean1 = bnRunningMean1; bnRunningVariance1 = bnRunningVariance1; a1=a1;
+          W2 = W2; bnScale2 = bnScale2; bnBias2 = bnBias2; bnRunningMean2 = bnRunningMean2; bnRunningVariance2 = bnRunningVariance2; a2=a2  }
+
+
+    interface INNet with
+        member t.train input exponentialAverageFactor = 
+            let bnMode = cudnnBatchNormMode.BatchNormPerActivation
+            matmult t.W1 input
+            |> batch_normalization_forward bnMode t.bnScale1 t.bnBias1 t.bnRunningMean1 t.bnRunningVariance1 (exponentialAverageFactor()) false
+            |> t.a1
+            |> matmult t.W2
+            |> batch_normalization_forward bnMode t.bnScale2 t.bnBias2 t.bnRunningMean2 t.bnRunningVariance2 (exponentialAverageFactor()) false
+            |> fun p -> add 1.0f p 1.0f input
+            |> t.a2
+
+        member t.inference input = 
+            let bnMode = cudnnBatchNormMode.BatchNormPerActivation
+            matmult t.W1 input
+            |> batch_normalization_forward bnMode t.bnScale1 t.bnBias1 t.bnRunningMean1 t.bnRunningVariance1 1.0 true
+            |> t.a1
+            |> matmult t.W2
+            |> batch_normalization_forward bnMode t.bnScale2 t.bnBias2 t.bnRunningMean2 t.bnRunningVariance2 1.0 true
+            |> fun p -> add 1.0f p 1.0f input
+            |> t.a2
+
+        member t.runLayer x = (t :> INNet).inference x
+
+        member l.ToArray = [|l.W1;l.bnScale1;l.bnBias1;l.bnRunningMean1;l.bnRunningVariance1;l.W2;l.bnScale2;l.bnBias2;l.bnRunningMean2;l.bnRunningVariance2|]
+        member l.ResetAdjoints () = 
+            l.W1.setZeroAdjoint();l.bnScale1.setZeroAdjoint();l.bnBias1.setZeroAdjoint()
+            l.W2.setZeroAdjoint();l.bnScale2.setZeroAdjoint();l.bnBias2.setZeroAdjoint()
+        member t.SGD learning_rate = 
+            saxpy -learning_rate t.W1.A' t.W1.P'
+            saxpy -learning_rate t.bnScale1.A' t.bnScale1.P'
+            saxpy -learning_rate t.bnBias1.A' t.bnBias1.P'
+
+            saxpy -learning_rate t.W2.A' t.W2.P'
+            saxpy -learning_rate t.bnScale2.A' t.bnScale2.P'
+            saxpy -learning_rate t.bnBias2.A' t.bnBias2.P'
 
 let load_data file_name is_constant =
     use stream_data = IO.File.OpenRead(file_name)
@@ -1510,4 +1699,3 @@ let load_data file_name is_constant =
         |]
 
     weights
-

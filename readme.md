@@ -19,3 +19,11 @@ UPDATE 4/7/2016: Done with the v4 wrapper and the convolutional [batch normaliza
 Also as luck would have it, the v5 RC of cuDNN came out so I might as well do that as well while I am at it. I was not planning on doing recurrent nets right now, but they will come in handy. I'd rather have functions for linear layers which would allow me to combine recurrent nets with batch normalization. At least, the new Winograd convolutional kernels are a reason to move to v5 already.
 
 Also, a paper showing how to use [recurrent batch normalization](http://arxiv.org/abs/1603.09025) effectively came out very recently.
+
+UPDATE 4/8/2016: Done with the v5 wrapper. Ever since the first version of cuDNN was released last year, its feature set had grown by leaps and bounds. At this rate Spiral will become just a front end to it. I ran the v5 on the batch normalization example just to make sure it works properly, but I have not bothered to test then new RNN functions yet.
+
+Maybe right now I finally have everything set to begin work on the N puzzle. To do all this just for that, I am a madman.
+
+
+
+License: LGPL 3.
