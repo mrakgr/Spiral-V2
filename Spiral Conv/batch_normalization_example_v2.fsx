@@ -47,7 +47,7 @@ let l1 = BNFullyConnectedLayer.create (784,2048,1,1) relu :> INNet
 //let l2 = BNFullyConnectedLayer.create (2048,2048,1,1) relu :> INNet
 //let l3 = BNFullyConnectedLayer.create (2048,2048,1,1) relu :> INNet
 let l2 = BNResidualFullyConnectedLayer.create (2048,2048,1,1) relu relu :> INNet
-let l4 = BNFullyConnectedLayer.create (2048,10,1,1) clipped_sigmoid :> INNet
+let l4 = BNFullyConnectedLayer.create (2048,10,1,1) clipped_softmax :> INNet
 
 let base_nodes = [|l1;l2;l4|]
 

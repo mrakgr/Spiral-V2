@@ -1322,6 +1322,25 @@ let add alpha (a: d4M) beta (b: d4M) =
         tape.Push add_backward_right
     c
 
+let softmax_instance_forward (data : d4M) =
+    let data_sizes = data.nchw
+
+    let srcTensorDesc = ObjectPool.getTensorDescriptor data_sizes
+    let output = data_sizes |> ObjectPool.getd4M false 
+
+    let algo = cudnnSoftmaxAlgorithm.Accurate // Log mode forgets to re-exponentiate at the end.
+    let mode = cudnnSoftmaxMode.Instance
+
+    cudnn.SoftmaxForward(algo,mode,1.0f,srcTensorDesc,data.P,0.0f,srcTensorDesc,output.P)
+
+    if data.A.IsSome then
+        let softmax_channel_backward () =
+            cudnn.SoftmaxBackward(algo,mode,1.0f,srcTensorDesc,output.P,srcTensorDesc,output.A.Value,1.0f,srcTensorDesc,data.A.Value)
+        tape.Push softmax_channel_backward
+    output
+
+let inline softmax x = softmax_instance_forward x
+
 let clipModule = lazy new DeviceTrinaryCoefTransformModule("((x < coef_x) ? coef_x : (x > coef_y ? coef_y : x))+coef_z;","Clip")
 let clipErrorModule = lazy new DeviceTrinaryCoefTransformModule("y*((x < coef_x) ? 0.0f : (x > coef_y ? 0.0f : 1.0f))+z;","ClipError")
 /// o <- clip(min,max,a)+scalar
@@ -1348,6 +1367,7 @@ let inline tanh_ x =
     let t = ObjectPool.getActivationDescriptor (cudnnActivationMode.Tanh, defaultReluNanOption, 0.0)
     activation_forward t x
 let inline clipped_sigmoid x = clip 0.0001f 0.9999f (sigmoid x) 0.0f
+let inline clipped_softmax x = clip 0.0001f 0.9999f (softmax x) 0.0f
 
 let squared_error_cost target activations =
     add 1.0f target -1.0f activations // TODO: tensor_add is ungodly slow in v3. Make v4 wrapper.
@@ -1485,7 +1505,6 @@ type ResidualFeedforwardLayer =
     static member inline create = ResidualFeedforwardLayer.createRandomLayer
 
     interface INNet with
-
         member l.runLayer (x:d4M) =
             linear_layer_matmult [|l.W1,x|] (Some l.b1) |> l.a1
             |> fun p -> linear_layer_matmult [|l.W2,p|] (Some l.b2)
