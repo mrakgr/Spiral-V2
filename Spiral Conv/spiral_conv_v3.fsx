@@ -1280,6 +1280,15 @@ let scale (alpha: float32) (a:Df) =
     tape.Push scale_backward
     c
 
+let sum_scalars (a:Df[]) =
+    let c = Df.create (ref 0.0f)
+
+    for l in a do c.P := !c.P + !l.P
+    
+    let sum_scalars_backwards () = for l in a do l.A := !c.A + !l.A
+    tape.Push sum_scalars_backwards
+    c
+
 let logModule = lazy new DeviceUnaryTransformModule("logf(x);","Log")
 //y=error
 //z=previous adjoint
@@ -1698,6 +1707,106 @@ type BNResidualFullyConnectedLayer =
             saxpy -learning_rate t.W2.A' t.W2.P'
             saxpy -learning_rate t.bnScale2.A' t.bnScale2.P'
             saxpy -learning_rate t.bnBias2.A' t.bnBias2.P'
+
+/// Adapted from the previous version of the library.
+/// An optimized implementation will be done in the future along with union types and streams.
+type LSTMLayer =
+    {W_z:d4M  // Input weight matrix for the block input
+     U_z:d4M  // Recurrent weight matrix for the block input
+     b_z:d4M  // Bias vector for the block input
+
+     W_i:d4M  // Input weight matrix for the input gate
+     U_i:d4M  // Recurrent weight matrix for the input gate
+     b_i:d4M  // Bias vector for the input gate
+     P_i:d4M  // Peephole weight matrix for the input gate
+
+     W_f:d4M  // Input weight matrix for the forget gate
+     U_f:d4M  // Recurrent weight matrix for the forget gate
+     b_f:d4M  // Bias vector for the forget gate
+     P_f:d4M  // Peephole weight matrix for the forget gate
+
+     W_o:d4M  // Input weight matrix for the output gate
+     U_o:d4M  // Recurrent weight matrix for the output gate
+     b_o:d4M  // Bias vector for the output gate
+     P_o:d4M  // Peephole weight matrix for the output gate
+
+     block_input_a : d4M -> d4M
+     block_output_a : d4M -> d4M
+     } 
+    
+    /// Returns all the weights in an array.
+    member l.ToArray = [|l.W_z;l.U_z;l.b_z;l.W_i;l.U_i;l.b_i;l.P_i;l.W_f;l.U_f;l.b_f;l.P_f;l.W_o;l.U_o;l.b_o;l.P_o|]
+    static member fromArray (a: d4M[]) block_input_a block_output_a =
+        {
+         W_z = a.[0]
+         U_z = a.[1]
+         b_z = a.[2]
+
+         W_i = a.[3]
+         U_i = a.[4]
+         b_i = a.[5]
+         P_i = a.[6]
+
+         W_f = a.[7]
+         U_f = a.[8]
+         b_f = a.[9]
+         P_f = a.[10]
+
+         W_o = a.[11]
+         U_o = a.[12]
+         b_o = a.[13]
+         P_o = a.[14]
+
+         block_input_a = block_input_a
+         block_output_a = block_output_a
+        }
+
+    static member createRandomLSTMLayer input_size hidden_size block_input_a block_output_a =
+        {
+        W_z = d4M.makeUniformRandomNode (input_size, hidden_size, 1, 1)
+        U_z = d4M.makeUniformRandomNode (hidden_size, hidden_size, 1, 1)
+        b_z = d4M.makeUniformRandomNode (1, hidden_size, 1, 1)
+        W_i = d4M.makeUniformRandomNode (input_size, hidden_size, 1, 1)
+        U_i = d4M.makeUniformRandomNode (hidden_size, hidden_size, 1, 1)
+        b_i = d4M.makeUniformRandomNode (1, hidden_size, 1, 1)
+        P_i = d4M.makeUniformRandomNode (hidden_size, hidden_size, 1, 1)
+        W_f = d4M.makeUniformRandomNode (input_size, hidden_size, 1, 1)
+        U_f = d4M.makeUniformRandomNode (hidden_size, hidden_size, 1, 1)
+        b_f = d4M.makeUniformRandomNode (1, hidden_size, 1, 1)
+        P_f = d4M.makeUniformRandomNode (hidden_size, hidden_size, 1, 1)
+        W_o = d4M.makeUniformRandomNode (input_size, hidden_size, 1, 1)
+        U_o = d4M.makeUniformRandomNode (hidden_size, hidden_size, 1, 1)
+        b_o = d4M.makeUniformRandomNode (1, hidden_size, 1, 1)
+        P_o = d4M.makeUniformRandomNode (hidden_size, hidden_size, 1, 1)
+
+        block_input_a = block_input_a
+        block_output_a = block_output_a
+        }
+
+    member l.runLayer (x:d4M) (y:d4M) (c:d4M) =
+        let block_input = linear_layer_matmult [|l.W_z,x;l.U_z,y|] (Some l.b_z) |> l.block_input_a
+        let input_gate = linear_layer_matmult [|l.W_i,x;l.U_i,y;l.P_i,c|] (Some l.b_i) |> sigmoid
+        let forget_gate = linear_layer_matmult [|l.W_f,x;l.U_f,y;l.P_f,c|] (Some l.b_f) |> sigmoid
+        let c' = linear_layer_hadmult [|block_input,input_gate;c,forget_gate|]
+        let output_gate = linear_layer_matmult [|l.W_o,x;l.U_o,y;l.P_o,c'|] (Some l.b_o) |> sigmoid
+        hadmult (l.block_output_a c') output_gate, c'
+
+    member l.runLayerNoH (x:d4M) =
+        let block_input = linear_layer_matmult [|l.W_z,x|] (Some l.b_z) |> l.block_input_a
+        let input_gate = linear_layer_matmult [|l.W_i,x|] (Some l.b_i) |> sigmoid
+        let forget_gate = linear_layer_matmult [|l.W_f,x|] (Some l.b_f) |> sigmoid
+        let c' = hadmult block_input input_gate
+        let output_gate = linear_layer_matmult [|l.W_o,x;l.P_o,c'|] (Some l.b_o) |> sigmoid
+        hadmult (l.block_output_a c') output_gate, c'
+
+    member l.runLayerNoI (y:d4M) (c:d4M) =
+        let block_input = linear_layer_matmult [|l.U_z,y|] (Some l.b_z) |> l.block_input_a
+        let input_gate = linear_layer_matmult [|l.U_i,y;l.P_i,c|] (Some l.b_i) |> sigmoid
+        let forget_gate = linear_layer_matmult [|l.U_f,y;l.P_f,c|] (Some l.b_f) |> sigmoid
+        let c' = linear_layer_hadmult [|block_input,input_gate;c,forget_gate|]
+        let output_gate = linear_layer_matmult [|l.U_o,y;l.P_o,c'|] (Some l.b_o) |> sigmoid
+        hadmult (l.block_output_a c') output_gate, c'
+
 
 let load_data file_name is_constant =
     use stream_data = IO.File.OpenRead(file_name)
