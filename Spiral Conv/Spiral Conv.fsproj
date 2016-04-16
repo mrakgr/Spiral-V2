@@ -79,6 +79,8 @@
     <None Include="batch_normalization_example.fsx" />
     <None Include="spiral_conv_v3.fsx" />
     <None Include="batch_normalization_example_v2.fsx" />
+    <None Include="embedded_reber.fsx" />
+    <None Include="rnn_example.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="CudaBlas">
@@ -103,6 +105,10 @@
     </Reference>
     <Reference Include="CudaSparse">
       <HintPath>..\packages\ManagedCuda-75-x64.7.5.7\lib\net45\x64\CudaSparse.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="FSharp.Charting">
+      <HintPath>..\packages\FSharp.Charting.0.90.13\lib\net40\FSharp.Charting.dll</HintPath>
       <Private>True</Private>
     </Reference>
     <Reference Include="ManagedCuda">

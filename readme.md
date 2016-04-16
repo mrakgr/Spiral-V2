@@ -24,6 +24,22 @@ UPDATE 4/8/2016: Done with the v5 wrapper. Ever since the first version of cuDNN
 
 Maybe right now I finally have everything set to begin work on the N puzzle. To do all this just for that, I am a madman.
 
+UPDATE 4/16/2016: Time to bring in the RNNs. The cuDNN ones do not have BN nor can they be extended in multiple dimensions, but they will do as a strong baseline. Given the success of residual nets, right now I am really suspecting that dimensionally folding standard feedforward into 2D nets could really ease the optimization burden. Hopefully some ML researcher will try it eventually and I will get to read about it.
 
+Edit(3h later): "I pretty much spent the last two hours deep in thought. I am starting to lean towards skipping implementing these functions.
+
+They are particularly troublesome. It is not that the instructions are unclear.
+
+It is that I have to implement a union type to get them to work properly.
+
+Before I can move forward with them, I basically have to ensure that the inputs are brought in the proper form.
+
+Right now they simply aren't architecturally compatible with the library.
+
+If I did a union type and the streams in addition to that, I might as well not even use those RNN functions as I would pretty much have everything to implement all the optimizations on my own. 
+
+Basically, I know how to do the union type, but as I do not want to spend two weeks doing it and the streams, I'll defer those optimization actions until I actually need them."
+
+The deal with the cuDNN v5 RNN functions is that both the inputs and the weights need to be stored into one array and clearly dealing with raw pointers is out of the question. I'll defer doing a union type for now.
 
 License: LGPL 3.
