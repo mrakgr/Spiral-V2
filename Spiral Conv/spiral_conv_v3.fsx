@@ -387,7 +387,6 @@ type ObjectPool() =
     member inline t.ResetPointers() =
         d4Mp := 0
         wp := 0
-        vip := 0
 
     /// Zeroes out the adjoints in preparation for the backprop step and sets all the object pool pointers to zero.
     member t.Reset () =
