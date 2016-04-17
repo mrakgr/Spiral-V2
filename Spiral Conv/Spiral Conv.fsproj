@@ -81,6 +81,7 @@
     <None Include="batch_normalization_example_v2.fsx" />
     <None Include="embedded_reber.fsx" />
     <None Include="rnn_example.fsx" />
+    <None Include="max_column_dump.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="CudaBlas">
