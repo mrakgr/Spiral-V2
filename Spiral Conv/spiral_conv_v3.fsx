@@ -113,7 +113,7 @@ type d4M =
     /// Does not allocate the adjoint array.
     static member createConstant(num_images: int, num_channels:int, num_rows: int, num_cols: int, dArray: float32[]) =
         let size = num_images*num_channels*num_rows*num_cols
-        if dArray.Length <> size then failwith "Invalid size in dMatrix construction."
+        if dArray.Length <> size then failwithf "Invalid size in dMatrix construction. dArray.Length=%i size=%i" dArray.Length size
         let p = to_dev dArray
         let a = None
         {num_images=num_images; num_channels=num_channels; num_rows=num_rows; num_cols=num_cols; P=p; A=a}
@@ -212,15 +212,19 @@ type d4M =
                     | false -> new_dev new_size |> Some
 
     /// Copies the primal matrix to a host array.
+    /// Blocks the host.
     member inline t.GatherPrimal() =
         let h_a = Array.zeroCreate<float32> t.size
         t.P.CopyToHost(h_a,SizeT 0, SizeT 0, SizeT t.size * t.P.TypeSize)
+        ctx.Synchronize()
         h_a
 
     /// Copies the adjoint matrix to a host array.
+    /// Blocks the host.
     member inline t.GatherAdjoint() =
         let h_a = Array.zeroCreate<float32> t.size
         t.A.Value.CopyToHost(h_a,SizeT 0, SizeT 0, SizeT t.size * t.P.TypeSize)
+        ctx.Synchronize()
         h_a
 
     /// The unmanaged Cuda memory has to be freed explicitly or by letting go of the context by resetting  the F# Interactive.
@@ -946,6 +950,82 @@ type DeviceMaxColumnActivationModule() =
         kernel.GridDimensions <- dim3(n)
         kernel.BlockDimensions <- dim3(block_size)
         kernel.RunAsync(str.Stream,x.DevicePointer,o.DevicePointer,m,n) |> ignore
+
+/// o <- max_col_index(x)
+/// Gets the maximum indices of each column.
+type DeviceMaxColumnIndexModule() = 
+    let block_size = 32
+
+    let kernel_name = "Hello"//"MaxColumnIndexKernel"
+    let kernel_code = 
+        [|"
+        //Kernel code:
+        extern \"C\" {
+            typedef float floatType;
+            #define INIT __int_as_float(0xff800000) // The constant init for the reduce operations. This is float negative infinity.
+            // The max reduce version.
+            __device__ inline floatType warpReduce(floatType value){
+                #pragma unroll
+	            for (int i=1; i<32; i*=2) {
+                    floatType tmp = __shfl_xor(value, i);
+                    value = (tmp > value) ? tmp : value;
+                    }
+	            return value;
+            }
+              
+            __device__ inline floatType blockReduce(floatType value){
+	            __shared__ floatType temp[32];
+                if (threadIdx.x < 32) temp[threadIdx.x] = INIT; 
+                floatType out_partial = warpReduce(value);
+                __syncthreads();
+	            if (threadIdx.x % 32 == 0) temp[threadIdx.x / 32] = out_partial;
+                __syncthreads();
+	            if (threadIdx.x < 32) out_partial = warpReduce(temp[threadIdx.x]);
+                return out_partial;
+            }
+
+            // Device code
+            __global__ void ";kernel_name;"(const floatType* A, floatType* O, const int num_rows, const int num_cols)
+            {
+                int row = threadIdx.x;
+                const int col = blockIdx.x;
+                int col_idx = blockIdx.x*num_rows; 
+                floatType max = INIT; // This is the negative infinity for floats.
+                int index = -1;
+                while (row < num_rows)
+                {
+                   if (A[row+col_idx] > max) {
+                        max = A[row+col_idx];
+                        index = row;
+                        }
+                    row += blockDim.x;
+                }
+                
+                __shared__ floatType max_index;
+                //if (max == blockReduce(max)) max_index = index; // As block size is only 32, I do not need the block reduce.
+                if (max == warpReduce(max)) max_index = index;
+                __syncthreads();
+                O[col] = max_index;
+            }
+        }
+
+        "|] |> String.concat ""
+
+    let kernel = load_kernel kernel_code kernel_name
+
+    member t.A(((n : int,c : int,h,w as x_nchw), x: CudaDeviceVariable<float32>), ((o_n,o_c,o_h,o_w), o: CudaDeviceVariable<float32>)) =
+        if n <> o_n then failwith "n <> o_n"
+        if o_c <> 1 || o_h <> 1 || o_w <> 1 then failwith "o_c <> 1 || o_h <> 1 || o_w <> 1"
+        let m = c*h*w
+        kernel.GridDimensions <- dim3(n)
+        kernel.BlockDimensions <- dim3(block_size)
+        kernel.RunAsync(str.Stream,x.DevicePointer,o.DevicePointer,m,n) |> ignore
+
+let maxColumnIndexModule = lazy new DeviceMaxColumnIndexModule()
+let get_max_indices (x : d4M) =
+    let o = ObjectPool.getd4M true (x.num_images,1,1,1)
+    maxColumnIndexModule.Value.A(x.P',o.P')
+    o
 
 
 // The gradient clipping module.
@@ -1827,3 +1907,4 @@ let load_data file_name is_constant =
         |]
 
     weights
+
