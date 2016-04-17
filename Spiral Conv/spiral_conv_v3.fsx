@@ -307,8 +307,6 @@ type ObjectPool() =
     let d4Mp = ref 0
     let workspacePool = ResizeArray()
     let wp = ref 0
-    let valueIndexPool = ResizeArray()
-    let vip = ref 0
     let mutable big_worspace = CudaDeviceVariable.Null
 
     let tensorDescriptorPool = Dictionary(HashIdentity.Structural)

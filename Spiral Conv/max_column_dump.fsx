@@ -40,6 +40,9 @@ type dValueIndex =
                 t.value_index_array.Dispose()
 
 type ObjectPool with
+    let valueIndexPool = ResizeArray()
+    let vip = ref 0
+
     member t.getdValueIndex n =
         let t' = ObjectPool.getFromPool valueIndexPool vip (fun _ -> dValueIndex.create n)
         t'.ReplaceIf n
