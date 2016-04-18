@@ -42,4 +42,10 @@ Basically, I know how to do the union type, but as I do not want to spend two we
 
 The deal with the cuDNN v5 RNN functions is that both the inputs and the weights need to be stored into one array and clearly dealing with raw pointers is out of the question. I'll defer doing a union type for now.
 
+UPDATE 4/18/2016: The fact that to do inference for Q Learning I need to have many different (perhaps hundreds) output layers has pushed the union type from something that would be good to have to make the LSTM faster to my number one priority. I'll do it and streams and in addition to that as most outputs will not be selected, I will have to make a mechanism to prune those dead paths. Seems simple enough. Let me get the basic blocks in place first...
+
+Edit: Created both the union type and the stream pool. The stream pool example is quite interesting. I've managed to speed up a long matrix multiply sequence by 7x compared to the naive implementation and adding it to the library seems trivial. For the union type, I will have to rewrite the functions to take advantage of it. With it I might be able to use the new cuDNN RNN functions as well, but unfortunately, I can't use those for Deep Q Learning as the input in the following step depends on the previous.
+
+At any rate, I will have to rewrite the library again, but I think that this time will really be it.
+
 License: LGPL 3.

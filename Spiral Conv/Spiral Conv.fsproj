@@ -82,6 +82,8 @@
     <None Include="embedded_reber.fsx" />
     <None Include="rnn_example.fsx" />
     <None Include="max_column_dump.fsx" />
+    <None Include="union_type_example.fsx" />
+    <None Include="streams_example.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="CudaBlas">
