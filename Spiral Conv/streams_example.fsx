@@ -147,7 +147,7 @@ type StreamPool(num) =
         p <- p + 1
         let (s,e as t) = ar.[p % num]
         //if e.Query() = false then e.Synchronize() // If the stream is in use, then block on the associated event.
-        str.WaitEvent e.Event // Why not just use this instead? Edit: It speeds up the example 100% compared to the above.
+        s.WaitEvent e.Event // Why not just use this instead? Edit: It speeds up the example 100% compared to the above.
         t
 
 let StreamPool = new StreamPool(128) // 1024 of them take roughly 50Mb, so I've settled on the 128 number.
@@ -207,9 +207,9 @@ for i=1 to 1 do
     t
     |> Array.iter (fun (a,b,c) -> 
         gemm nT nT 1.0f a.P' b.P' 1.0f c.P'
-        //ctx.Synchronize()
+        ctx.Synchronize()
         ) // Having the ctx.Synchronize inside is 7x slower than having it outside.
-    ctx.Synchronize()
+    //ctx.Synchronize()
 #time
 
 let s = t.[5] |> fun (_,_,x) -> x.P.Gather()
