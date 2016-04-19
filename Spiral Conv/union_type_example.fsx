@@ -1,7 +1,4 @@
-﻿// I made this example to check the correctness of BN in the feedforward case, but it seems it is entirely correct.
-// This makes me wonder why it works so poorly on N puzzle.
-
-open System
+﻿open System
 open System.IO
 
 #if INTERACTIVE

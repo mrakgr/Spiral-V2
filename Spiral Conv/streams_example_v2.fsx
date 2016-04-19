@@ -1,4 +1,12 @@
-﻿open System
+﻿// The streams work well, but they get clogged up. This could be bad for RNNs. I need to think up a way of how to clean up the occupancy arrays...
+// I can't figure this out, but this problem is similar to those faced by garbage collectors.
+
+// Edit: Yeah, there is no way around it but to clean up after end of every loop. I can also add this to the backwards step after every pass.
+// Beautiful. Problem solved.
+
+// Actually, as this is an issue, I now see that I could derive benefits by using the wavefront iteration.
+
+open System
 open System.IO
 
 #if INTERACTIVE
@@ -13,6 +21,8 @@ open ManagedCuda.CudaDNNv5
 let wait_on_event (s : CudaStream) (occupied_ar : ResizeArray<CudaEvent>) =
         occupied_ar
         |> Seq.iter (fun x -> s.WaitEvent x.Event)
+
+let pool = ResizeArray<unit -> unit>()
 
 type d4MUnion =
     {
@@ -45,6 +55,7 @@ type d4MUnion =
         let elements = d4MUnion.make_elements p a ar l
         
         {elements = elements; P=p; A=a; is_dead=false; primal_occupied = ResizeArray(); adjoint_occupied = ResizeArray()}
+        |> fun x -> pool.Add(fun _ -> x.primal_occupied.Clear(); x.adjoint_occupied.Clear()); x
 
     static member private create' (ar_data : ((int * int * int * int) * float32[]) [], is_constant) =
         let ar, data = Array.unzip ar_data
@@ -143,7 +154,9 @@ type StreamPool(num) =
     member t.P = 
         p <- p + 1
         let (s,e as t) = ar.[p % num]
-        //if e.Query() = false then e.Synchronize() // If the stream is in use, then block on the associated event.
+//        if e.Query() = false then 
+//            pool |> Seq.iter (fun x -> x())
+//            ctx.Synchronize() // If the stream is in use, then block on the associated event.
         s.WaitEvent e.Event // Why not just use this instead? Edit: It speeds up the example 100% compared to the above.
         t
 
@@ -206,9 +219,11 @@ for i=1 to 100 do
         gemm nT nT 1.0f a.P' b.P' 1.0f c.P'
         //ctx.Synchronize()
         ) // Having the ctx.Synchronize inside is 7x slower than having it outside.
+    pool |> Seq.iter (fun x -> x()) // I can also add this to the tape for the backwards step.
     ctx.Synchronize()
 #time
 
 let s = t.[5] |> fun (_,_,x) -> x.P.Gather()
 let s' = t.[5] |> fun (_,_,x) -> x.P.Gather() // This one is triggered after switching the ctx in the loop above and then running it again.
 s = s' // This is enough to satisfy me that there aren't any data races. This thing really works. Amazing.
+
