@@ -150,7 +150,7 @@ type StreamPool(num) =
         s.WaitEvent e.Event // Why not just use this instead? Edit: It speeds up the example 100% compared to the above.
         t
 
-let StreamPool = new StreamPool(128) // 1024 of them take roughly 50Mb, so I've settled on the 128 number.
+let StreamPool = new StreamPool(16) // 1024 of them take roughly 50Mb, so I've settled on the 128 number. // Edit: 16 > 32 > 64 > 128 > 1024 in terms of performance.
 
 /// General matrix-matrix multiply from cuBLAS. Inplace version
 /// c,h,w get multiplied together to form the first dimension. n is the second dimension.
@@ -207,9 +207,9 @@ for i=1 to 1 do
     t
     |> Array.iter (fun (a,b,c) -> 
         gemm nT nT 1.0f a.P' b.P' 1.0f c.P'
-        ctx.Synchronize()
+        //ctx.Synchronize()
         ) // Having the ctx.Synchronize inside is 7x slower than having it outside.
-    //ctx.Synchronize()
+    ctx.Synchronize()
 #time
 
 let s = t.[5] |> fun (_,_,x) -> x.P.Gather()
