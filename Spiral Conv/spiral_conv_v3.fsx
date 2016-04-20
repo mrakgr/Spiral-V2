@@ -1405,7 +1405,7 @@ let find_max_index (action_values : float32[]) =
 
 type d4M with
     static member makeUniformRandomNode (n,c,h,w as nchw) =
-        let scale = (2.0f / sqrt(add_nchw nchw |> float32))
+        let scale = (1.0f / sqrt(add_nchw nchw |> float32))
         let p = d4M.create(n,c,h,w)
         fillRandomUniformMatrix p.P' scale 0.0f
         p

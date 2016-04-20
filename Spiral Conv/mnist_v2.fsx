@@ -59,34 +59,36 @@ let training_loop label data = // For now, this is just checking if the new libr
     |> Array.fold (fun x (convPars,layer) -> layer.runLayer (convPars,x)) data
     |> fun x -> lazy get_accuracy label x, cross_entropy_cost label x
 
-let learning_rate = 0.5f
+let learning_rate = 0.03f
 
 let test() =
-    for i=1 to 5 do
+    for i=1 to 1 do
         let mutable er = 0.0f
-        for j=0 to train_images.Length-1 do
+        for j=0 to 1 do //train_images.Length-1 do
             let _,r = training_loop train_labels.[j] train_images.[j] // Forward step
             er <- er + !r.P
             ObjectPool.Reset() // Resets all the adjoints from the top of the pointer in the object pool along with the pointers.
             base_nodes |> Array.iter (fun x -> x.ResetAdjoints())
-            //printfn "Squared error cost on the minibatch is %f at batch %i" !r.P j
+            printfn "Squared error cost on the minibatch is %f at batch %i" !r.P j
 
             if !r.P |> Single.IsNaN then failwith "Nan!"
 
             r.A := 1.0f // Loads the 1.0f at the top
             while tape.Count > 0 do tape.Pop() |> fun x -> x() // The backpropagation step
             base_nodes |> Array.iter (fun x -> x.SGD learning_rate) // Stochastic gradient descent.
-        printfn "-----"
-        printfn "Squared error cost on the dataset is %f at iteration %i" (er / float32 train_images.Length) i
+//        printfn "-----"
+//        printfn "Squared error cost on the dataset is %f at iteration %i" (er / float32 train_images.Length) i
+//
+//        let mutable acc = 0.0f
+//        for j=0 to test_images.Length-1 do
+//            let acc',r = training_loop test_labels.[j] test_images.[j] // Forward step
+//            ObjectPool.ResetPointers()
+//            tape.Clear()
+//            acc <- acc'.Value + acc
+//    
+//        printfn "Accuracy on the test set is %i/10000." (int acc)
+//        printfn "-----"
 
-        let mutable acc = 0.0f
-        for j=0 to test_images.Length-1 do
-            let acc',r = training_loop test_labels.[j] test_images.[j] // Forward step
-            ObjectPool.ResetPointers()
-            tape.Clear()
-            acc <- acc'.Value + acc
-    
-        printfn "Accuracy on the test set is %i/10000." (int acc)
-        printfn "-----"
-
+#time
 test()
+#time
